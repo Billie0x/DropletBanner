@@ -60,8 +60,8 @@ Configure everything live under **Settings → DropletBanner**:
 ## Installation
 
 1. Download the latest `.deb` package from the **Releases** page (or the **Actions → `DropletBanner-debs`** build artifact):
-   - **RootHide:** `com.billie.dropletbanner_1.6.0_iphoneos-arm64e.deb`
-   - **Rootless:** `com.billie.dropletbanner_1.6.0_iphoneos-arm64.deb`
+   - **RootHide:** `com.billie.dropletbanner_1.8.0_iphoneos-arm64e.deb`
+   - **Rootless:** `com.billie.dropletbanner_1.8.0_iphoneos-arm64.deb`
 2. Share or open the `.deb` in **Sileo** or **Zebra** and tap **Install**.
 3. Tap **Restart SpringBoard** to activate the tweak.
 
