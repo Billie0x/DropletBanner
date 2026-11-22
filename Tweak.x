@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <objc/runtime.h>
 #import <math.h>
@@ -10,6 +11,7 @@
 @optional
 - (UIViewController *)notificationViewController;
 - (UIViewController *)viewController;
+- (id)notificationRequest;
 @end
 
 @interface SBNotificationBannerDestination : NSObject
@@ -18,6 +20,12 @@
 @end
 
 @interface NCNotificationShortLookViewController : UIViewController
+@optional
+- (id)notificationRequest;
+@end
+
+@interface UIImage (DBPrivateAppIcon)
++ (UIImage *)_applicationIconImageForBundleIdentifier:(NSString *)bundleIdentifier format:(int)format scale:(CGFloat)scale;
 @end
 
 #pragma mark - Preferences
@@ -27,6 +35,7 @@ static NSString *const kPrefsChangedNotification = @"com.billie.dropletbanner/pr
 
 static BOOL gEnabled = YES;
 static BOOL gAnimateDismiss = YES;
+static BOOL gTintDropletWithAppIcon = YES;
 static double gEntryDuration = 0.48;
 static double gAmplitude = 1.0;
 
@@ -38,6 +47,9 @@ static void DBLoadPreferences(void) {
 
     id dismissObj = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("AnimateDismiss"), (__bridge CFStringRef)kPrefsDomain));
     gAnimateDismiss = dismissObj ? [dismissObj boolValue] : YES;
+
+    id tintObj = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("TintDropletWithAppIcon"), (__bridge CFStringRef)kPrefsDomain));
+    gTintDropletWithAppIcon = tintObj ? [tintObj boolValue] : YES;
 
     id durObj = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("EntryDuration"), (__bridge CFStringRef)kPrefsDomain));
     gEntryDuration = durObj ? fmin(fmax([durObj doubleValue], 0.25), 0.90) : 0.48;
@@ -158,6 +170,272 @@ static UIImage *DBSnapshotView(UIView *view) {
     }];
 }
 
+#pragma mark - App Icon Dominant Color Extraction
+
+static NSCache<NSString *, UIColor *> *gIconColorCache = nil;
+static const void *kDBViewDropletColorKey = &kDBViewDropletColorKey;
+
+static UIColor *DBExtractDominantColorFromImage(UIImage *image) {
+    if (!image) return nil;
+    CGImageRef cgImg = image.CGImage;
+    if (!cgImg) return nil;
+
+    const size_t dim = 16;
+    uint8_t pixels[dim * dim * 4];
+    memset(pixels, 0, sizeof(pixels));
+
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(
+        pixels,
+        dim,
+        dim,
+        8,
+        dim * 4,
+        cs,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big
+    );
+    CGColorSpaceRelease(cs);
+    if (!ctx) return nil;
+
+    CGContextSetInterpolationQuality(ctx, kCGInterpolationLow);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, dim, dim), cgImg);
+    CGContextRelease(ctx);
+
+    const int kBins = 24;
+    double binWeight[kBins] = {0};
+    double binR[kBins] = {0};
+    double binG[kBins] = {0};
+    double binB[kBins] = {0};
+
+    double totalColorfulWeight = 0.0;
+    double neutralWeight = 0.0;
+    double neutralR = 0.0, neutralG = 0.0, neutralB = 0.0;
+
+    for (size_t i = 0; i < dim * dim; i++) {
+        double a = pixels[i * 4 + 3] / 255.0;
+        if (a < 0.55) continue;
+
+        double r = fmin(1.0, (pixels[i * 4 + 0] / 255.0) / a);
+        double g = fmin(1.0, (pixels[i * 4 + 1] / 255.0) / a);
+        double b = fmin(1.0, (pixels[i * 4 + 2] / 255.0) / a);
+
+        double maxC = fmax(r, fmax(g, b));
+        double minC = fmin(r, fmin(g, b));
+        double delta = maxC - minC;
+        double sat = (maxC > 0.001) ? (delta / maxC) : 0.0;
+        double val = maxC;
+
+        neutralR += r;
+        neutralG += g;
+        neutralB += b;
+        neutralWeight += 1.0;
+
+        // Ignore near-white, near-black, and low-saturation grays when finding the signature brand color
+        if (sat < 0.18 || val < 0.14) continue;
+
+        double hue = 0.0;
+        if (delta > 0.0001) {
+            if (maxC == r) {
+                hue = fmod(((g - b) / delta), 6.0);
+            } else if (maxC == g) {
+                hue = ((b - r) / delta) + 2.0;
+            } else {
+                hue = ((r - g) / delta) + 4.0;
+            }
+            hue *= 60.0;
+            if (hue < 0.0) hue += 360.0;
+        }
+
+        int bin = (int)floor(hue / (360.0 / kBins)) % kBins;
+        if (bin < 0) bin += kBins;
+
+        double w = (sat * sat) * (0.35 + 0.65 * val);
+        binWeight[bin] += w;
+        binR[bin] += r * w;
+        binG[bin] += g * w;
+        binB[bin] += b * w;
+        totalColorfulWeight += w;
+    }
+
+    if (totalColorfulWeight > 1.2) {
+        int bestBin = 0;
+        double bestScore = -1.0;
+        for (int b = 0; b < kBins; b++) {
+            int prev = (b + kBins - 1) % kBins;
+            int next = (b + 1) % kBins;
+            double score = binWeight[b] + 0.45 * (binWeight[prev] + binWeight[next]);
+            if (score > bestScore) {
+                bestScore = score;
+                bestBin = b;
+            }
+        }
+
+        int prev = (bestBin + kBins - 1) % kBins;
+        int next = (bestBin + 1) % kBins;
+        double wSum = binWeight[bestBin] + 0.45 * (binWeight[prev] + binWeight[next]);
+        if (wSum > 0.001) {
+            double r = (binR[bestBin] + 0.45 * (binR[prev] + binR[next])) / wSum;
+            double g = (binG[bestBin] + 0.45 * (binG[prev] + binG[next])) / wSum;
+            double b = (binB[bestBin] + 0.45 * (binB[prev] + binB[next])) / wSum;
+
+            UIColor *rawColor = [UIColor colorWithRed:r green:g blue:b alpha:1.0];
+            CGFloat h = 0, s = 0, v = 0, al = 1.0;
+            if ([rawColor getHue:&h saturation:&s brightness:&v alpha:&al]) {
+                // Keep the water drop rich and readable without blowing out to harsh neon
+                s = fmin(0.92, fmax(s, 0.58));
+                v = fmin(0.94, fmax(v, 0.52));
+                return [UIColor colorWithHue:h saturation:s brightness:v alpha:1.0];
+            }
+            return rawColor;
+        }
+    }
+
+    // Monochrome icon fallback (e.g. X, Threads, Settings): keep black icons black, silver/white icons clean gray
+    if (neutralWeight > 0.5) {
+        double lum = (0.299 * neutralR + 0.587 * neutralG + 0.114 * neutralB) / neutralWeight;
+        if (lum < 0.28) {
+            return [UIColor blackColor];
+        }
+        CGFloat gray = (CGFloat)fmin(0.84, fmax(0.45, lum));
+        return [UIColor colorWithWhite:gray alpha:1.0];
+    }
+
+    return nil;
+}
+
+static id DBSafeValueForKey(id obj, NSString *key) {
+    if (!obj || !key) return nil;
+    SEL sel = NSSelectorFromString(key);
+    if ([obj respondsToSelector:sel]) {
+        @try {
+            return [obj valueForKey:key];
+        } @catch (NSException *exception) {
+            return nil;
+        }
+    }
+    return nil;
+}
+
+static UIImage *DBFindAppIconImageInView(UIView *cardView, UIWindow *win) {
+    if (!cardView || !win) return nil;
+    CGRect cardInWin = [cardView convertRect:cardView.bounds toCoordinateSpace:win.coordinateSpace];
+    if (CGRectIsEmpty(cardInWin)) return nil;
+
+    UIImage *bestImage = nil;
+    CGFloat bestScore = -1.0;
+
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:cardView];
+    NSInteger inspected = 0;
+    while (queue.count > 0 && inspected < 75) {
+        UIView *cur = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        inspected++;
+
+        if ([cur isKindOfClass:[UIImageView class]]) {
+            UIImageView *iv = (UIImageView *)cur;
+            if (iv.image && iv.image.CGImage) {
+                CGRect r = [iv convertRect:iv.bounds toCoordinateSpace:win.coordinateSpace];
+                CGFloat w = r.size.width;
+                CGFloat h = r.size.height;
+                if (w >= 18.0 && w <= 56.0 && h >= 18.0 && h <= 56.0) {
+                    CGFloat ratio = w / fmax(1.0, h);
+                    if (ratio >= 0.78 && ratio <= 1.28) {
+                        CGFloat relX = (CGRectGetMidX(r) - CGRectGetMinX(cardInWin)) / fmax(1.0, CGRectGetWidth(cardInWin));
+                        // App icons sit near the leading edge (or trailing edge in RTL)
+                        CGFloat edgeBonus = (relX <= 0.35 || relX >= 0.65) ? 40.0 : 0.0;
+                        CGFloat sizeBonus = 30.0 - fabs(w - 38.0);
+                        CGFloat score = edgeBonus + sizeBonus;
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestImage = iv.image;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (UIView *sub in cur.subviews) {
+            [queue addObject:sub];
+        }
+    }
+    return bestImage;
+}
+
+static UIColor *DBResolveAppIconColor(id sourceObj, UIView *bannerView) {
+    if (!gTintDropletWithAppIcon) return nil;
+
+    if (!gIconColorCache) {
+        gIconColorCache = [[NSCache alloc] init];
+        gIconColorCache.countLimit = 64;
+    }
+
+    // Extract NCNotificationRequest from presentable or view controller
+    id req = DBSafeValueForKey(sourceObj, @"notificationRequest");
+    if (!req) {
+        id vc = DBSafeValueForKey(sourceObj, @"notificationViewController");
+        if (vc) {
+            req = DBSafeValueForKey(vc, @"notificationRequest");
+        }
+    }
+
+    NSString *sectionID = nil;
+    id rawSectionID = DBSafeValueForKey(req, @"sectionIdentifier");
+    if ([rawSectionID isKindOfClass:[NSString class]] && ((NSString *)rawSectionID).length > 0) {
+        sectionID = (NSString *)rawSectionID;
+        UIColor *cached = [gIconColorCache objectForKey:sectionID];
+        if (cached) {
+            if (bannerView) {
+                objc_setAssociatedObject(bannerView, kDBViewDropletColorKey, cached, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            return cached;
+        }
+    }
+
+    UIImage *iconImage = nil;
+
+    // 1. Primary: NCNotificationRequest.content.icons
+    id content = DBSafeValueForKey(req, @"content");
+    id icons = DBSafeValueForKey(content, @"icons");
+    if ([icons isKindOfClass:[NSArray class]]) {
+        for (id item in (NSArray *)icons) {
+            if ([item isKindOfClass:[UIImage class]] && ((UIImage *)item).CGImage) {
+                iconImage = (UIImage *)item;
+                break;
+            }
+        }
+    }
+    if (!iconImage) {
+        id singleIcon = DBSafeValueForKey(content, @"icon");
+        if ([singleIcon isKindOfClass:[UIImage class]] && ((UIImage *)singleIcon).CGImage) {
+            iconImage = (UIImage *)singleIcon;
+        }
+    }
+
+    // 2. Secondary: SpringBoard icon services via sectionIdentifier
+    if (!iconImage && sectionID && [UIImage respondsToSelector:@selector(_applicationIconImageForBundleIdentifier:format:scale:)]) {
+        @try {
+            iconImage = [UIImage _applicationIconImageForBundleIdentifier:sectionID format:2 scale:1.0];
+        } @catch (NSException *exception) {}
+    }
+
+    // 3. Fallback: inspect live banner view hierarchy for app icon UIImageView
+    if (!iconImage && bannerView && bannerView.window) {
+        UIView *cardView = DBFindCardView(bannerView, bannerView.window);
+        iconImage = DBFindAppIconImageInView(cardView, bannerView.window);
+    }
+
+    UIColor *resolvedColor = DBExtractDominantColorFromImage(iconImage);
+    if (resolvedColor) {
+        if (sectionID) {
+            [gIconColorCache setObject:resolvedColor forKey:sectionID];
+        }
+        if (bannerView) {
+            objc_setAssociatedObject(bannerView, kDBViewDropletColorKey, resolvedColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+    return resolvedColor;
+}
+
 #pragma mark - Passthrough Overlay Window
 
 @interface DBDropletEffectWindow : UIWindow
@@ -201,10 +479,12 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 @property (nonatomic, weak) UIWindow *sourceWindow;
 @property (nonatomic, strong) DBDropletEffectWindow *effectWindow;
 @property (nonatomic, strong) UIView *canvasView;
-@property (nonatomic, strong) CAShapeLayer *neckLayer;
+@property (nonatomic, strong) CAGradientLayer *neckGradientLayer;
+@property (nonatomic, strong) CAShapeLayer *neckMaskLayer;
 @property (nonatomic, strong) CAShapeLayer *bodyLayer;
 @property (nonatomic, strong) UIImageView *exitSnapshotView;
 @property (nonatomic, strong) UIColor *surfaceColor;
+@property (nonatomic, strong) UIColor *dropletTintColor;
 @property (nonatomic, strong) CADisplayLink *displayLink;
 @property (nonatomic, strong) DBDisplayLinkProxy *proxy;
 @property (nonatomic, assign) CFTimeInterval startedAt;
@@ -213,8 +493,8 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 @property (nonatomic, assign) CGRect cutoutRect;
 @property (nonatomic, assign) CGRect cardRect;
 @property (nonatomic, assign) CGFloat cardCornerRadius;
-- (void)startEntryForView:(UIView *)view;
-- (void)startExitForView:(UIView *)view fromSwipe:(BOOL)fromSwipe;
+- (void)startEntryForView:(UIView *)view dropletColor:(UIColor *)dropletColor;
+- (void)startExitForView:(UIView *)view fromSwipe:(BOOL)fromSwipe dropletColor:(UIColor *)dropletColor;
 - (void)tick:(CADisplayLink *)link;
 - (void)stop;
 @end
@@ -286,10 +566,11 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
             [self.bodyLayer removeFromSuperlayer];
             self.bodyLayer = nil;
         }
-        if (self.neckLayer) {
-            [self.neckLayer removeFromSuperlayer];
-            self.neckLayer = nil;
+        if (self.neckGradientLayer) {
+            [self.neckGradientLayer removeFromSuperlayer];
+            self.neckGradientLayer = nil;
         }
+        self.neckMaskLayer = nil;
         if (self.effectWindow) {
             self.effectWindow.hidden = YES;
             self.effectWindow.rootViewController = nil;
@@ -305,7 +586,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     }
 }
 
-- (BOOL)setupOverlayForView:(UIView *)rawView isExit:(BOOL)isExit fromSwipe:(BOOL)fromSwipe {
+- (BOOL)setupOverlayForView:(UIView *)rawView isExit:(BOOL)isExit fromSwipe:(BOOL)fromSwipe dropletColor:(UIColor *)dropletColor {
     UIWindow *win = rawView.window;
     if (!win) return NO;
 
@@ -321,8 +602,6 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 
     CGRect frameInWin = [cardView convertRect:cardView.bounds toCoordinateSpace:win.coordinateSpace];
 
-    // On swipe-up dismiss, capture the live presentationLayer position so the droplet starts
-    // seamlessly right where the user's finger released the banner.
     if (isExit && cardView.layer.presentationLayer && win.layer.presentationLayer) {
         CGRect presRect = [cardView.layer.presentationLayer convertRect:cardView.layer.presentationLayer.bounds
                                                                 toLayer:win.layer.presentationLayer];
@@ -346,8 +625,6 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
             frameInWin.origin.y = !CGRectIsEmpty(gCachedRestingCardRect) ? gCachedRestingCardRect.origin.y : minRestingY;
         }
     } else {
-        // Allow slightly elevated swipe-up release positions without snapping downward,
-        // while guarding against offscreen BannerKit dismissal frames.
         CGFloat minVisibleSwipeY = CGRectGetMaxY(cutout) - 4.0;
         if (frameInWin.origin.y < CGRectGetMinY(cutout) - 10.0 || frameInWin.origin.y > winSize.height * 0.35) {
             frameInWin.origin.y = !CGRectIsEmpty(gCachedRestingCardRect) ? gCachedRestingCardRect.origin.y : minRestingY;
@@ -372,6 +649,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     self.cardRect = frameInWin;
     self.cardCornerRadius = cornerR;
     self.surfaceColor = [[UIColor secondarySystemBackgroundColor] resolvedColorWithTraitCollection:cardView.traitCollection];
+    self.dropletTintColor = gTintDropletWithAppIcon ? dropletColor : nil;
 
     DBDropletEffectWindow *overlay = nil;
     if (win.windowScene) {
@@ -401,10 +679,18 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     canvas.accessibilityElementsHidden = YES;
     [rootVC.view addSubview:canvas];
 
-    CAShapeLayer *neck = [CAShapeLayer layer];
-    neck.frame = canvas.bounds;
-    neck.fillColor = [UIColor blackColor].CGColor;
-    [canvas.layer addSublayer:neck];
+    // Liquid neck uses a vertical gradient masked to the curved neck path so the pitch-black
+    // Dynamic Island smoothly liquefies into the app-icon-colored water drop with zero seam.
+    CAGradientLayer *neckGrad = [CAGradientLayer layer];
+    neckGrad.frame = canvas.bounds;
+    neckGrad.colors = @[ (id)[UIColor blackColor].CGColor, (id)[UIColor blackColor].CGColor ];
+    neckGrad.locations = @[ @(0.0), @(1.0) ];
+
+    CAShapeLayer *neckMask = [CAShapeLayer layer];
+    neckMask.frame = canvas.bounds;
+    neckMask.fillColor = [UIColor whiteColor].CGColor;
+    neckGrad.mask = neckMask;
+    [canvas.layer addSublayer:neckGrad];
 
     CAShapeLayer *body = [CAShapeLayer layer];
     body.frame = canvas.bounds;
@@ -413,7 +699,8 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 
     self.effectWindow = overlay;
     self.canvasView = canvas;
-    self.neckLayer = neck;
+    self.neckGradientLayer = neckGrad;
+    self.neckMaskLayer = neckMask;
     self.bodyLayer = body;
     return YES;
 }
@@ -428,7 +715,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
 }
 
-- (void)startEntryForView:(UIView *)view {
+- (void)startEntryForView:(UIView *)view dropletColor:(UIColor *)dropletColor {
     self.exiting = NO;
 
     __block BOOL ready = NO;
@@ -436,7 +723,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
 
-        ready = [self setupOverlayForView:view isExit:NO fromSwipe:NO];
+        ready = [self setupOverlayForView:view isExit:NO fromSwipe:NO dropletColor:dropletColor];
         if (ready) {
             double speedScale = gEntryDuration / 0.48;
             self.duration = fmin(fmax(0.84 * speedScale, 0.46), 1.45);
@@ -459,7 +746,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     }
 }
 
-- (void)startExitForView:(UIView *)view fromSwipe:(BOOL)fromSwipe {
+- (void)startExitForView:(UIView *)view fromSwipe:(BOOL)fromSwipe dropletColor:(UIColor *)dropletColor {
     self.exiting = YES;
 
     __block BOOL ready = NO;
@@ -467,7 +754,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
 
-        ready = [self setupOverlayForView:view isExit:YES fromSwipe:fromSwipe];
+        ready = [self setupOverlayForView:view isExit:YES fromSwipe:fromSwipe dropletColor:dropletColor];
         if (ready) {
             UIImage *snap = DBSnapshotView(self.contentView);
             if (snap) {
@@ -485,7 +772,6 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
                 self.exitSnapshotView = snapView;
             }
 
-            // Hide native dismissing banner immediately so stock slide-up never shows behind our droplet
             self.hideContainer.hidden = YES;
             self.hideContainer.alpha = 0.0;
 
@@ -527,15 +813,12 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     double neckProg = 0.0;
 
     if (!self.exiting) {
-        // ENTRY: drop out of Island (0.0 -> 1.15), bloom width (0.32 -> 1.18), reveal native card (0.62 -> 0.96)
         double t = DBClamp01(normT) * 1.2;
         yProg = DBSpringCurve(t / 1.15, 7.38, 5.15127, 1.43266);
         wProg = DBSpringCurve((t - 0.32) / 0.86, 7.20, 5.40, 1.33333);
         revealProg = DBClamp01((t - 0.62) / 0.34);
         neckProg = DBSpringCurve((t - 0.11) / 0.70, 8.91, 1.26961, 7.01792);
     } else {
-        // EXIT (exact reverse): fade content cleanly (0.0 -> 0.20), squeeze width into teardrop (0.04 -> 0.52),
-        // form liquid neck & suck straight up into the Dynamic Island (0.20 -> 0.82)
         double t = DBClamp01(normT) * 0.82;
         yProg = 1.0 - DBSpringCurve((t - 0.20) / 0.62, 7.60, 3.80, 1.95);
         wProg = 1.0 - DBSpringCurve((t - 0.04) / 0.48, 7.90, 3.50, 2.25);
@@ -571,7 +854,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 
     UIBezierPath *bodyPath = [UIBezierPath bezierPathWithRoundedRect:curRect cornerRadius:curRadius];
 
-    // Curved black liquid neck bridging Dynamic Island bottom to the teardrop
+    // Curved liquid neck bridging Dynamic Island bottom to the teardrop
     double neckVisibility = 0.0;
     if (clampedYProg > 0.02 && neckProg < 0.94) {
         double rise = DBClamp01(clampedYProg / 0.18);
@@ -605,8 +888,34 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     if (self.surfaceColor) {
         [self.surfaceColor getRed:&sr green:&sg blue:&sb alpha:&sa];
     }
-    double colorBlend = DBClamp01(clampedWProg * 0.82);
-    UIColor *bodyColor = [UIColor colorWithRed:sr * colorBlend green:sg * colorBlend blue:sb * colorBlend alpha:1.0];
+
+    UIColor *bodyColor = nil;
+    if (self.dropletTintColor) {
+        CGFloat dr = 0.0, dg = 0.0, db = 0.0, da = 1.0;
+        [self.dropletTintColor getRed:&dr green:&dg blue:&db alpha:&da];
+
+        // Keep ONLY the water drop tinted with the app icon color:
+        // 1) Ramp black -> app icon color as the drop pulls out of the black Dynamic Island
+        // 2) Smoothly transition app icon color -> neutral banner surface as it blooms into the full notification
+        double tintIn = DBClamp01(clampedYProg / 0.22);
+        double bloomOut = DBClamp01((clampedWProg - 0.08) / 0.52);
+
+        double baseR = dr * tintIn;
+        double baseG = dg * tintIn;
+        double baseB = db * tintIn;
+
+        double finalR = DBLerp(baseR, sr, bloomOut);
+        double finalG = DBLerp(baseG, sg, bloomOut);
+        double finalB = DBLerp(baseB, sb, bloomOut);
+        bodyColor = [UIColor colorWithRed:finalR green:finalG blue:finalB alpha:1.0];
+    } else {
+        double colorBlend = DBClamp01(clampedWProg * 0.82);
+        bodyColor = [UIColor colorWithRed:sr * colorBlend green:sg * colorBlend blue:sb * colorBlend alpha:1.0];
+    }
+
+    CGFloat canvasH = fmax(1.0, CGRectGetHeight(self.canvasView.bounds));
+    CGFloat startGradY = (CGFloat)DBClamp01(islandBottomY / canvasH);
+    CGFloat endGradY = (CGFloat)DBClamp01(fmax(islandBottomY + 2.0, dropAttachY) / canvasH);
 
     [UIView performWithoutAnimation:^{
         [CATransaction begin];
@@ -616,12 +925,18 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
         self.bodyLayer.fillColor = bodyColor.CGColor;
 
         if (neckPath) {
-            self.neckLayer.path = neckPath.CGPath;
-            self.neckLayer.fillColor = [UIColor blackColor].CGColor;
-            self.neckLayer.opacity = (float)DBClamp01(neckVisibility * 1.15);
+            self.neckMaskLayer.path = neckPath.CGPath;
+            self.neckGradientLayer.startPoint = CGPointMake(0.5, startGradY);
+            self.neckGradientLayer.endPoint = CGPointMake(0.5, endGradY);
+            if (self.dropletTintColor) {
+                self.neckGradientLayer.colors = @[ (id)[UIColor blackColor].CGColor, (id)bodyColor.CGColor ];
+            } else {
+                self.neckGradientLayer.colors = @[ (id)[UIColor blackColor].CGColor, (id)[UIColor blackColor].CGColor ];
+            }
+            self.neckGradientLayer.opacity = (float)DBClamp01(neckVisibility * 1.15);
         } else {
-            self.neckLayer.path = NULL;
-            self.neckLayer.opacity = 0.0f;
+            self.neckMaskLayer.path = NULL;
+            self.neckGradientLayer.opacity = 0.0f;
         }
 
         if (!self.exiting) {
@@ -703,7 +1018,7 @@ static UIView *DBExtractBannerViewFromPresentable(id<BNPresentable> presentable)
     return vc.viewIfLoaded ?: vc.view;
 }
 
-static void DBLaunchEntryForView(UIView *view) {
+static void DBLaunchEntryForView(UIView *view, id sourceObj) {
     if (!view || !view.window) return;
 
     CFTimeInterval now = CACurrentMediaTime();
@@ -717,9 +1032,10 @@ static void DBLaunchEntryForView(UIView *view) {
         [gActiveAnimator stop];
     }
 
+    UIColor *dropColor = DBResolveAppIconColor(sourceObj, view);
     DBDropletAnimator *animator = [[DBDropletAnimator alloc] init];
     gActiveAnimator = animator;
-    [animator startEntryForView:view];
+    [animator startEntryForView:view dropletColor:dropColor];
 }
 
 static void DBScheduleEntryForPresentable(id<BNPresentable> presentable, NSInteger attempt) {
@@ -728,7 +1044,7 @@ static void DBScheduleEntryForPresentable(id<BNPresentable> presentable, NSInteg
 
     UIView *bannerView = DBExtractBannerViewFromPresentable(presentable);
     if (bannerView && bannerView.window && !CGRectIsEmpty(bannerView.bounds)) {
-        DBLaunchEntryForView(bannerView);
+        DBLaunchEntryForView(bannerView, presentable);
         return;
     }
     if (attempt < 15) {
@@ -743,7 +1059,7 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
     UIView *v = vc.viewIfLoaded;
     if (v && v.window && !CGRectIsEmpty(v.bounds)) {
         if (DBIsBannerViewController(vc)) {
-            DBLaunchEntryForView(v);
+            DBLaunchEntryForView(v, vc);
         }
         return;
     }
@@ -769,7 +1085,7 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
 
     UIView *bannerView = DBExtractBannerViewFromPresentable(presentable);
     if (bannerView && bannerView.window && !CGRectIsEmpty(bannerView.bounds)) {
-        DBLaunchEntryForView(bannerView);
+        DBLaunchEntryForView(bannerView, presentable);
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
             DBScheduleEntryForPresentable(presentable, 0);
@@ -781,8 +1097,6 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
     if (gEnabled && gAnimateDismiss && !UIAccessibilityIsReduceMotionEnabled()) {
         NSString *lowerReason = reason ? reason.lowercaseString : @"";
 
-        // Skip droplet retraction ONLY when tapping the notification to open the app or expanding to Long Look.
-        // Both auto-dismiss AND swipe-up dismissal play the reversed droplet retraction into the Dynamic Island!
         BOOL isTapOrExpand = ([lowerReason containsString:@"tap"] ||
                               [lowerReason containsString:@"action"] ||
                               [lowerReason containsString:@"open"] ||
@@ -827,9 +1141,16 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
                 if (gActiveAnimator) {
                     [gActiveAnimator stop];
                 }
+                UIColor *dropColor = nil;
+                if (gTintDropletWithAppIcon) {
+                    dropColor = objc_getAssociatedObject(bannerView, kDBViewDropletColorKey);
+                    if (!dropColor) {
+                        dropColor = DBResolveAppIconColor(presentable, bannerView);
+                    }
+                }
                 DBDropletAnimator *exitAnimator = [[DBDropletAnimator alloc] init];
                 gActiveAnimator = exitAnimator;
-                [exitAnimator startExitForView:bannerView fromSwipe:isSwipeDismiss];
+                [exitAnimator startExitForView:bannerView fromSwipe:isSwipeDismiss dropletColor:dropColor];
             }
         }
     }
@@ -846,7 +1167,7 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
 
     UIView *v = self.viewIfLoaded;
     if (v && v.window && !CGRectIsEmpty(v.bounds) && DBIsBannerViewController(self)) {
-        DBLaunchEntryForView(v);
+        DBLaunchEntryForView(v, self);
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
             DBScheduleEntryForViewController(self, 0);

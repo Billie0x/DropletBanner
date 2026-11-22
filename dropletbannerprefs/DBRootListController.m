@@ -132,7 +132,7 @@
 
     UILabel *subLabel = [[UILabel alloc] init];
     subLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    subLabel.text = @"Dynamic Island Droplet Notifications • v1.6.0";
+    subLabel.text = @"Dynamic Island Droplet Notifications • v1.7.0";
     subLabel.font = [UIFont systemFontOfSize:12.5 weight:UIFontWeightRegular];
     subLabel.textColor = [UIColor secondaryLabelColor];
     subLabel.textAlignment = NSTextAlignmentCenter;

@@ -1,6 +1,6 @@
 Package: com.billie.dropletbanner
 Name: DropletBanner
-Version: 1.6.0
+Version: 1.7.0
 Architecture: iphoneos-arm
 Description: Standalone Dynamic Island & notch droplet banner notification animation.
 Maintainer: Billie
