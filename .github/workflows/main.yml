@@ -1,0 +1,36 @@
+name: Build DropletBanner (.deb)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup RootHide Theos & iOS SDKs
+        uses: waruhachi/theos-action@v2.6.6
+        with:
+          theos-src: 'roothide/theos'
+          theos-branch: 'master'
+          sdks-src: 'theos/sdks'
+          sdks-branch: 'master'
+
+      - name: Build RootHide (.deb - iphoneos-arm64e)
+        run: |
+          [ -f Makefile ] || cd DropletBanner
+          make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide
+
+      - name: Build Rootless (.deb - iphoneos-arm64)
+        run: |
+          [ -f Makefile ] || cd DropletBanner
+          make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+
+      - name: Upload compiled .deb packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: DropletBanner-debs
+          path: '**/packages/*.deb'
