@@ -1,6 +1,6 @@
 Package: com.custom.dropletbanner
 Name: DropletBanner
-Version: 1.4.0
+Version: 1.5.0
 Architecture: iphoneos-arm
 Description: Standalone Dynamic Island & notch droplet banner notification animation.
 Maintainer: Billie
