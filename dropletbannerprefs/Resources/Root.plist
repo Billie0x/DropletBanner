@@ -90,6 +90,30 @@
             <key>PostNotification</key>
             <string>com.custom.dropletbanner/prefsChanged</string>
         </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Credits</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>cellClass</key>
+            <string>DBCreditCell</string>
+            <key>action</key>
+            <string>openDeveloperLink:</string>
+            <key>height</key>
+            <real>70</real>
+            <key>creditTitle</key>
+            <string>Developed by Billie</string>
+            <key>creditSubtitle</key>
+            <string>@Billie0x</string>
+            <key>creditAvatar</key>
+            <string>billie_avatar</string>
+            <key>creditURL</key>
+            <string>https://github.com/Billie0x</string>
+        </dict>
     </array>
 </dict>
 </plist>
