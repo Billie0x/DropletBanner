@@ -67,20 +67,5 @@ Configure everything live under **Settings → DropletBanner**:
 
 ---
 
-## Building from Source
-
-### Cloud Build (GitHub Actions)
-Push any change or trigger **Build DropletBanner (.deb)** manually from the **Actions** tab (`.github/workflows/main.yml`). Both RootHide (`arm64e`) and Rootless (`arm64`) `.deb` packages are uploaded automatically under the **`DropletBanner-debs`** artifact.
-
-### Local Build (Theos)
-Requires [RootHide Theos](https://github.com/roothide/theos) and a patched iOS 16.5 SDK:
-
-```bash
-# Build for RootHide (iphoneos-arm64e)
-make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide
-
-# Build for Rootless (iphoneos-arm64)
-make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
-
 Credits
-Developer: Billie (@Billie0x)
+Developer: Billie 
