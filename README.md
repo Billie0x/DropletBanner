@@ -66,6 +66,3 @@ Configure everything live under **Settings → DropletBanner**:
 3. Tap **Restart SpringBoard** to activate the tweak.
 
 ---
-
-Credits
-Developer: Billie 
