@@ -17,7 +17,7 @@
 
 ## Overview
 
-**DropletBanner** is a lightweight, standalone iOS SpringBoard tweak that animates incoming notification banners out of the Dynamic Island or notch as a smooth liquid droplet—and retracts them seamlessly back inside on dismissal.
+**DropletBanner** is a lightweight, standalone iOS SpringBoard tweak that animates incoming notification banners out of the Dynamic Island or notch as a smooth liquid droplet and retracts them seamlessly back inside on dismissal.
 
 It hooks `SBNotificationBannerDestination` cleanly without replacing or restyling Apple's banner views, preserving your native iOS appearance (including Liquid Glass), preview privacy, sounds, haptics, quick actions, and Long Look gestures.
 
