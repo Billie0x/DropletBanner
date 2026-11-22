@@ -20,7 +20,6 @@
 @end
 
 @interface NCNotificationShortLookViewController : UIViewController
-@optional
 - (id)notificationRequest;
 @end
 
@@ -180,8 +179,9 @@ static UIColor *DBExtractDominantColorFromImage(UIImage *image) {
     CGImageRef cgImg = image.CGImage;
     if (!cgImg) return nil;
 
-    const size_t dim = 16;
-    uint8_t pixels[dim * dim * 4];
+    enum { kDBIconDim = 16, kDBHueBins = 24 };
+    const size_t dim = kDBIconDim;
+    uint8_t pixels[kDBIconDim * kDBIconDim * 4];
     memset(pixels, 0, sizeof(pixels));
 
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
@@ -201,11 +201,11 @@ static UIColor *DBExtractDominantColorFromImage(UIImage *image) {
     CGContextDrawImage(ctx, CGRectMake(0, 0, dim, dim), cgImg);
     CGContextRelease(ctx);
 
-    const int kBins = 24;
-    double binWeight[kBins] = {0};
-    double binR[kBins] = {0};
-    double binG[kBins] = {0};
-    double binB[kBins] = {0};
+    const int kBins = kDBHueBins;
+    double binWeight[kDBHueBins] = {0};
+    double binR[kDBHueBins] = {0};
+    double binG[kDBHueBins] = {0};
+    double binB[kDBHueBins] = {0};
 
     double totalColorfulWeight = 0.0;
     double neutralWeight = 0.0;
