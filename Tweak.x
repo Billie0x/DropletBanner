@@ -2,6 +2,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <CoreMotion/CoreMotion.h>
 #import <objc/runtime.h>
 #import <math.h>
 
@@ -61,6 +62,12 @@ static double gBloomRimDuration = 0.38;
 
 static BOOL gIslandRecoilEnabled = YES;
 static double gIslandRecoilIntensity = 1.0;
+
+static BOOL gMagneticSwipeNeckEnabled = YES;
+static double gMagneticNeckStrength = 1.0;
+
+static BOOL gGyroCurveEnabled = YES;
+static double gGyroCurveIntensity = 1.0;
 
 static BOOL gHapticsEnabled = YES;
 static NSInteger gHapticStrength = 0; // 0: Soft, 1: Light, 2: Medium, 3: Rigid
@@ -152,6 +159,20 @@ static void DBLoadPreferences(void) {
 
     id recoilIntObj = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("IslandRecoilIntensity"), (__bridge CFStringRef)kPrefsDomain));
     gIslandRecoilIntensity = recoilIntObj ? fmin(fmax([recoilIntObj doubleValue], 0.3), 2.0) : 1.0;
+
+    // Magnetic Swipe-Up Neck
+    id magEnabledObj = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("MagneticSwipeNeckEnabled"), (__bridge CFStringRef)kPrefsDomain));
+    gMagneticSwipeNeckEnabled = magEnabledObj ? [magEnabledObj boolValue] : YES;
+
+    id magStrengthObj = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("MagneticNeckStrength"), (__bridge CFStringRef)kPrefsDomain));
+    gMagneticNeckStrength = magStrengthObj ? fmin(fmax([magStrengthObj doubleValue], 0.5), 2.0) : 1.0;
+
+    // Gyro-Reactive Droplet Curve
+    id gyroEnabledObj = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("GyroCurveEnabled"), (__bridge CFStringRef)kPrefsDomain));
+    gGyroCurveEnabled = gyroEnabledObj ? [gyroEnabledObj boolValue] : YES;
+
+    id gyroIntObj = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("GyroCurveIntensity"), (__bridge CFStringRef)kPrefsDomain));
+    gGyroCurveIntensity = gyroIntObj ? fmin(fmax([gyroIntObj doubleValue], 0.3), 2.0) : 1.0;
 
     // Neck-Snap Micro-Haptic
     id hapticsObj = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("HapticsEnabled"), (__bridge CFStringRef)kPrefsDomain));
@@ -653,6 +674,79 @@ static CGRect gCachedRestingCardRect = {{0, 0}, {0, 0}};
 static CGFloat gCachedCornerRadius = 26.0;
 static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 
+#pragma mark - Gyro-Reactive Motion Tracker (Zero Idle Battery Usage)
+
+@interface DBMotionTracker : NSObject
+@property (nonatomic, strong) CMMotionManager *manager;
+@property (nonatomic, assign) NSInteger activeUsers;
+@property (nonatomic, assign) NSUInteger stopToken;
+@property (nonatomic, assign) double smoothedGravityX;
++ (instancetype)shared;
+- (void)acquire;
+- (void)releaseMotion;
+- (double)currentGravityX;
+@end
+
+@implementation DBMotionTracker
+
++ (instancetype)shared {
+    static DBMotionTracker *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[DBMotionTracker alloc] init];
+    });
+    return instance;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _manager = [[CMMotionManager alloc] init];
+        _manager.deviceMotionUpdateInterval = 1.0 / 60.0;
+    }
+    return self;
+}
+
+- (void)acquire {
+    if (!gGyroCurveEnabled || !self.manager.deviceMotionAvailable) return;
+    self.activeUsers += 1;
+    self.stopToken += 1;
+    if (!self.manager.deviceMotionActive) {
+        [self.manager startDeviceMotionUpdates];
+    }
+}
+
+- (void)releaseMotion {
+    if (self.activeUsers > 0) {
+        self.activeUsers -= 1;
+    }
+    if (self.activeUsers == 0 && self.manager.deviceMotionActive) {
+        NSUInteger token = ++self.stopToken;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.65 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (self.stopToken == token && self.activeUsers == 0 && self.manager.deviceMotionActive) {
+                [self.manager stopDeviceMotionUpdates];
+                self.smoothedGravityX = 0.0;
+            }
+        });
+    }
+}
+
+- (double)currentGravityX {
+    if (!gGyroCurveEnabled || !self.manager.deviceMotionAvailable) return 0.0;
+    CMDeviceMotion *motion = self.manager.deviceMotion;
+    if (!motion) return self.smoothedGravityX;
+
+    double rawGx = motion.gravity.x;
+    if (isnan(rawGx) || isinf(rawGx)) rawGx = 0.0;
+    rawGx = fmin(fmax(rawGx, -0.65), 0.65);
+
+    // Smooth low-pass filter so liquid tilt feels weighty rather than jittery
+    self.smoothedGravityX = self.smoothedGravityX + (rawGx - self.smoothedGravityX) * 0.24;
+    return self.smoothedGravityX;
+}
+
+@end
+
 #pragma mark - Droplet Animator
 
 @interface DBDropletAnimator : NSObject
@@ -671,6 +765,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 @property (nonatomic, strong) UIColor *dropletTintColor;
 @property (nonatomic, strong) UIImpactFeedbackGenerator *hapticGenerator;
 @property (nonatomic, assign) BOOL hapticFired;
+@property (nonatomic, assign) BOOL motionAcquired;
 @property (nonatomic, strong) CADisplayLink *displayLink;
 @property (nonatomic, strong) DBDisplayLinkProxy *proxy;
 @property (nonatomic, assign) CFTimeInterval startedAt;
@@ -708,6 +803,10 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     }
     self.proxy = nil;
     self.hapticGenerator = nil;
+    if (self.motionAcquired) {
+        self.motionAcquired = NO;
+        [[DBMotionTracker shared] releaseMotion];
+    }
 
     BOOL wasExiting = self.exiting;
     UIView *containerToRestore = self.hideContainer;
@@ -943,6 +1042,11 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
         self.hapticGenerator = nil;
     }
 
+    if (gGyroCurveEnabled && !self.motionAcquired) {
+        self.motionAcquired = YES;
+        [[DBMotionTracker shared] acquire];
+    }
+
     return YES;
 }
 
@@ -1108,9 +1212,19 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     double curW = fmax(16.0, DBLerp(dropW, CGRectGetWidth(self.cardRect), clampedWProg));
     double curH = fmax(16.0, DBLerp(dropH, CGRectGetHeight(self.cardRect), clampedWProg));
 
+    double islandMidX = CGRectGetMidX(self.cutoutRect);
+    double gyroSwayX = 0.0;
+    if (gGyroCurveEnabled) {
+        double gx = [[DBMotionTracker shared] currentGravityX];
+        double maxSway = 26.0 * gGyroCurveIntensity;
+        double dropArc = sin(DBClamp01(clampedYProg) * M_PI);
+        double freeFromCard = 1.0 - DBClamp01(clampedWProg * 1.15);
+        gyroSwayX = gx * maxSway * dropArc * freeFromCard;
+    }
+
     double startMidY = CGRectGetMaxY(self.cutoutRect) - 0.34 * dropH;
     double curMidY = DBLerp(startMidY, CGRectGetMidY(self.cardRect), yProg);
-    double curMidX = CGRectGetMidX(self.cutoutRect);
+    double curMidX = islandMidX + gyroSwayX;
 
     CGRect curRect = CGRectMake(curMidX - curW * 0.5, curMidY - curH * 0.5, curW, curH);
     CGFloat maxR = (CGFloat)(fmin(curW, curH) * 0.5);
@@ -1170,15 +1284,20 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
         CGFloat midY = (islandBottomY + dropAttachY) * 0.5;
         CGFloat pinchX = (CGFloat)(topHalfW * 0.22 * (0.5 + 0.5 * neckVisibility));
 
+        CGFloat topMidX = (CGFloat)islandMidX;
+        CGFloat botMidX = (CGFloat)curMidX;
+        CGFloat bendMidX = (CGFloat)((topMidX + botMidX) * 0.5 + gyroSwayX * 0.25);
+        CGFloat spanY = dropAttachY - islandBottomY;
+
         neckPath = [UIBezierPath bezierPath];
-        [neckPath moveToPoint:CGPointMake(curMidX - topHalfW, islandBottomY)];
-        [neckPath addCurveToPoint:CGPointMake(curMidX - botHalfW, dropAttachY)
-                    controlPoint1:CGPointMake(curMidX - pinchX, midY)
-                    controlPoint2:CGPointMake(curMidX - pinchX, midY)];
-        [neckPath addLineToPoint:CGPointMake(curMidX + botHalfW, dropAttachY)];
-        [neckPath addCurveToPoint:CGPointMake(curMidX + topHalfW, islandBottomY)
-                    controlPoint1:CGPointMake(curMidX + pinchX, midY)
-                    controlPoint2:CGPointMake(curMidX + pinchX, midY)];
+        [neckPath moveToPoint:CGPointMake(topMidX - topHalfW, islandBottomY)];
+        [neckPath addCurveToPoint:CGPointMake(botMidX - botHalfW, dropAttachY)
+                    controlPoint1:CGPointMake(topMidX - pinchX, midY - spanY * 0.08)
+                    controlPoint2:CGPointMake(bendMidX - pinchX, midY + spanY * 0.08)];
+        [neckPath addLineToPoint:CGPointMake(botMidX + botHalfW, dropAttachY)];
+        [neckPath addCurveToPoint:CGPointMake(topMidX + topHalfW, islandBottomY)
+                    controlPoint1:CGPointMake(bendMidX + pinchX, midY + spanY * 0.08)
+                    controlPoint2:CGPointMake(topMidX + pinchX, midY - spanY * 0.08)];
         [neckPath closePath];
     }
 
@@ -1300,6 +1419,454 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 
 @end
 
+#pragma mark - Magnetic Swipe-Up Neck Controller
+
+static const void *kDBMagneticPanKey = &kDBMagneticPanKey;
+
+@class DBMagneticNeckController;
+
+@interface DBMagneticLinkProxy : NSObject
+@property (nonatomic, weak) DBMagneticNeckController *owner;
+- (void)tickCollapse:(CADisplayLink *)link;
+@end
+
+@interface DBMagneticNeckController : NSObject <UIGestureRecognizerDelegate>
+@property (nonatomic, weak) UIView *trackedCard;
+@property (nonatomic, weak) UIWindow *sourceWindow;
+@property (nonatomic, strong) DBDropletEffectWindow *overlayWindow;
+@property (nonatomic, strong) UIView *canvasView;
+@property (nonatomic, strong) CAShapeLayer *islandPulseLayer;
+@property (nonatomic, strong) CAGradientLayer *neckGradientLayer;
+@property (nonatomic, strong) CAShapeLayer *neckMaskLayer;
+@property (nonatomic, strong) UIColor *tintColor;
+@property (nonatomic, assign) CGRect cutoutRect;
+@property (nonatomic, assign) CGRect startCardRect;
+@property (nonatomic, assign) CGFloat lastPullProgress;
+@property (nonatomic, assign) CGFloat lastAttachY;
+@property (nonatomic, assign) CGFloat lastCardMidX;
+@property (nonatomic, assign) CGFloat lastCardWidth;
+@property (nonatomic, assign) BOOL active;
+@property (nonatomic, assign) BOOL latchHapticFired;
+@property (nonatomic, assign) BOOL motionAcquired;
+@property (nonatomic, strong) UIImpactFeedbackGenerator *hapticGenerator;
+@property (nonatomic, strong) CADisplayLink *collapseLink;
+@property (nonatomic, strong) DBMagneticLinkProxy *collapseProxy;
+@property (nonatomic, assign) CFTimeInterval collapseStartedAt;
+@property (nonatomic, assign) CGFloat collapseStartProgress;
++ (instancetype)shared;
+- (void)attachToBannerView:(UIView *)rawView dropletColor:(UIColor *)dropletColor;
+- (void)updateInteractiveCard:(UIView *)cardView window:(UIWindow *)win upwardPull:(CGFloat)upwardPull cardTopY:(CGFloat)cardTopY cardMidX:(CGFloat)cardMidX cardWidth:(CGFloat)cardWidth tintColor:(UIColor *)tintColor;
+- (void)beginCollapse;
+- (void)db_tickCollapse:(CADisplayLink *)link;
+- (void)cancelImmediate;
+@end
+
+@implementation DBMagneticLinkProxy
+- (void)tickCollapse:(CADisplayLink *)link {
+    [self.owner db_tickCollapse:link];
+}
+@end
+
+@implementation DBMagneticNeckController
+
++ (instancetype)shared {
+    static DBMagneticNeckController *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[DBMagneticNeckController alloc] init];
+    });
+    return instance;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return YES;
+}
+
+- (void)attachToBannerView:(UIView *)rawView dropletColor:(UIColor *)dropletColor {
+    if (!rawView || !rawView.window) return;
+    UIWindow *win = rawView.window;
+    UIView *cardView = DBFindCardView(rawView, win);
+    if (!cardView) return;
+
+    if (dropletColor) {
+        objc_setAssociatedObject(cardView, kDBViewDropletColorKey, dropletColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    UIPanGestureRecognizer *existing = objc_getAssociatedObject(cardView, kDBMagneticPanKey);
+    if (existing && existing.view == cardView) return;
+
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(db_handleBannerPan:)];
+    pan.cancelsTouchesInView = NO;
+    pan.delaysTouchesBegan = NO;
+    pan.delaysTouchesEnded = NO;
+    pan.delegate = self;
+    [cardView addGestureRecognizer:pan];
+    objc_setAssociatedObject(cardView, kDBMagneticPanKey, pan, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+- (BOOL)db_ensureOverlayForWindow:(UIWindow *)win tintColor:(UIColor *)tintColor {
+    if (!win) return NO;
+    CGSize winSize = win.bounds.size;
+    if (winSize.width < 250.0) return NO;
+    if (gPauseInLandscape && winSize.width > winSize.height) return NO;
+
+    if (self.overlayWindow && self.sourceWindow == win) {
+        self.tintColor = (gDropletColorMode != DBDropletColorModeBlack) ? tintColor : nil;
+        return YES;
+    }
+
+    [self cancelImmediate];
+
+    self.sourceWindow = win;
+    self.cutoutRect = DBResolveCutoutRectForWindow(win);
+    self.tintColor = (gDropletColorMode != DBDropletColorModeBlack) ? tintColor : nil;
+
+    [UIView performWithoutAnimation:^{
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+
+        DBDropletEffectWindow *overlay = win.windowScene
+            ? [[DBDropletEffectWindow alloc] initWithWindowScene:win.windowScene]
+            : [[DBDropletEffectWindow alloc] initWithFrame:win.bounds];
+        overlay.frame = win.bounds;
+        overlay.windowLevel = win.windowLevel + 1.0;
+        overlay.backgroundColor = [UIColor clearColor];
+        overlay.clipsToBounds = NO;
+        overlay.userInteractionEnabled = NO;
+        overlay.accessibilityElementsHidden = YES;
+
+        UIViewController *rootVC = [[UIViewController alloc] init];
+        rootVC.view.backgroundColor = [UIColor clearColor];
+        rootVC.view.clipsToBounds = NO;
+        rootVC.view.userInteractionEnabled = NO;
+        rootVC.view.frame = overlay.bounds;
+        overlay.rootViewController = rootVC;
+        [overlay layoutIfNeeded];
+
+        UIView *canvas = [[UIView alloc] initWithFrame:overlay.bounds];
+        canvas.backgroundColor = [UIColor clearColor];
+        canvas.clipsToBounds = NO;
+        canvas.userInteractionEnabled = NO;
+        canvas.accessibilityElementsHidden = YES;
+        [rootVC.view addSubview:canvas];
+
+        CAShapeLayer *islandPulse = [CAShapeLayer layer];
+        islandPulse.frame = canvas.bounds;
+        islandPulse.fillColor = [UIColor blackColor].CGColor;
+        islandPulse.opacity = 0.0f;
+        [canvas.layer addSublayer:islandPulse];
+
+        CAGradientLayer *neckGrad = [CAGradientLayer layer];
+        neckGrad.frame = canvas.bounds;
+        neckGrad.colors = @[ (id)[UIColor blackColor].CGColor, (id)[UIColor blackColor].CGColor ];
+        neckGrad.locations = @[ @(0.0), @(1.0) ];
+
+        CAShapeLayer *neckMask = [CAShapeLayer layer];
+        neckMask.frame = canvas.bounds;
+        neckMask.fillColor = [UIColor whiteColor].CGColor;
+        neckGrad.mask = neckMask;
+        [canvas.layer addSublayer:neckGrad];
+
+        overlay.hidden = NO;
+
+        self.overlayWindow = overlay;
+        self.canvasView = canvas;
+        self.islandPulseLayer = islandPulse;
+        self.neckGradientLayer = neckGrad;
+        self.neckMaskLayer = neckMask;
+
+        [CATransaction commit];
+    }];
+
+    self.latchHapticFired = NO;
+    if (gHapticsEnabled) {
+        self.hapticGenerator = [[UIImpactFeedbackGenerator alloc] initWithStyle:DBCurrentImpactStyle()];
+        [self.hapticGenerator prepare];
+    } else {
+        self.hapticGenerator = nil;
+    }
+
+    if (gGyroCurveEnabled && !self.motionAcquired) {
+        self.motionAcquired = YES;
+        [[DBMotionTracker shared] acquire];
+    }
+
+    self.active = YES;
+    return YES;
+}
+
+- (void)db_renderNeckProgress:(CGFloat)progress attachY:(CGFloat)attachY cardMidX:(CGFloat)cardMidX cardWidth:(CGFloat)cardWidth {
+    if (!self.overlayWindow || !self.canvasView) return;
+
+    CGFloat islandMidX = CGRectGetMidX(self.cutoutRect);
+    CGFloat islandBottomY = CGRectGetMaxY(self.cutoutRect) - 4.0;
+    CGFloat strength = (CGFloat)fmin(fmax(gMagneticNeckStrength, 0.5), 2.0);
+    CGFloat p = (CGFloat)DBClamp01(progress);
+
+    // Subtle gyro tilt on the magnetic bridge as well
+    CGFloat gyroBendX = 0.0;
+    if (gGyroCurveEnabled) {
+        double gx = [[DBMotionTracker shared] currentGravityX];
+        gyroBendX = (CGFloat)(gx * 16.0 * gGyroCurveIntensity * p);
+    }
+
+    // Clamp attachment point so bridge smoothly spans from Island down to banner top edge
+    CGFloat clampedAttachY = fmax(islandBottomY + 2.0, fmin(attachY, islandBottomY + 95.0));
+    CGFloat spanY = clampedAttachY - islandBottomY;
+
+    // Stretch factor: thicker & wider as the banner gets pulled closer to the Dynamic Island
+    CGFloat topHalfW = CGRectGetWidth(self.cutoutRect) * (0.20 + 0.20 * p) * (0.85 + 0.15 * strength);
+    CGFloat botHalfW = fmin(cardWidth * 0.34, topHalfW * (1.28 + 0.35 * p));
+    CGFloat pinchHalfW = fmax(3.5, topHalfW * (0.16 + 0.34 * p));
+    CGFloat midY = islandBottomY + spanY * 0.50;
+
+    CGFloat targetBotMidX = islandMidX + (cardMidX - islandMidX) * 0.35 + gyroBendX * 0.45;
+    CGFloat bendMidX = (islandMidX + targetBotMidX) * 0.5 + gyroBendX * 0.45;
+
+    UIBezierPath *neckPath = nil;
+    if (p > 0.015 && spanY > 2.0) {
+        neckPath = [UIBezierPath bezierPath];
+        [neckPath moveToPoint:CGPointMake(islandMidX - topHalfW, islandBottomY)];
+        [neckPath addCurveToPoint:CGPointMake(targetBotMidX - botHalfW, clampedAttachY)
+                    controlPoint1:CGPointMake(islandMidX - pinchHalfW, midY - spanY * 0.08)
+                    controlPoint2:CGPointMake(bendMidX - pinchHalfW, midY + spanY * 0.08)];
+        [neckPath addLineToPoint:CGPointMake(targetBotMidX + botHalfW, clampedAttachY)];
+        [neckPath addCurveToPoint:CGPointMake(islandMidX + topHalfW, islandBottomY)
+                    controlPoint1:CGPointMake(bendMidX + pinchHalfW, midY + spanY * 0.08)
+                    controlPoint2:CGPointMake(islandMidX + pinchHalfW, midY - spanY * 0.08)];
+        [neckPath closePath];
+    }
+
+    // Subtle Dynamic Island magnetic swell while pulling upward
+    UIBezierPath *pulsePath = nil;
+    CGFloat pulseAlpha = 0.0;
+    if (gIslandRecoilEnabled && CGRectGetHeight(self.cutoutRect) >= 32.0 && p > 0.05) {
+        CGFloat padX = (CGFloat)(3.6 * gIslandRecoilIntensity * p);
+        CGFloat padY = (CGFloat)(2.4 * gIslandRecoilIntensity * p);
+        CGRect pulseRect = CGRectInset(self.cutoutRect, -padX, -padY * 0.5);
+        pulseRect.origin.y += padY * 0.45;
+        pulsePath = [UIBezierPath bezierPathWithRoundedRect:pulseRect cornerRadius:pulseRect.size.height * 0.5];
+        pulseAlpha = fmin(1.0, p * 1.4);
+    }
+
+    CGFloat canvasH = fmax(1.0, CGRectGetHeight(self.canvasView.bounds));
+    CGFloat startGradY = (CGFloat)DBClamp01(islandBottomY / canvasH);
+    CGFloat endGradY = (CGFloat)DBClamp01(clampedAttachY / canvasH);
+
+    UIColor *bottomColor = self.tintColor ?: [UIColor blackColor];
+
+    [UIView performWithoutAnimation:^{
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+
+        if (pulsePath && pulseAlpha > 0.01) {
+            self.islandPulseLayer.path = pulsePath.CGPath;
+            self.islandPulseLayer.opacity = (float)pulseAlpha;
+        } else {
+            self.islandPulseLayer.path = NULL;
+            self.islandPulseLayer.opacity = 0.0f;
+        }
+
+        if (neckPath) {
+            self.neckMaskLayer.path = neckPath.CGPath;
+            self.neckGradientLayer.startPoint = CGPointMake(0.5, startGradY);
+            self.neckGradientLayer.endPoint = CGPointMake(0.5, endGradY);
+            self.neckGradientLayer.colors = @[ (id)[UIColor blackColor].CGColor, (id)bottomColor.CGColor ];
+            self.neckGradientLayer.opacity = (float)DBClamp01(p * 1.15);
+        } else {
+            self.neckMaskLayer.path = NULL;
+            self.neckGradientLayer.opacity = 0.0f;
+        }
+
+        [CATransaction commit];
+    }];
+}
+
+- (void)updateInteractiveCard:(UIView *)cardView window:(UIWindow *)win upwardPull:(CGFloat)upwardPull cardTopY:(CGFloat)cardTopY cardMidX:(CGFloat)cardMidX cardWidth:(CGFloat)cardWidth tintColor:(UIColor *)tintColor {
+    if (!gMagneticSwipeNeckEnabled || DBShouldSkipGlobally()) {
+        [self cancelImmediate];
+        return;
+    }
+
+    if (self.collapseLink) {
+        [self.collapseLink invalidate];
+        self.collapseLink = nil;
+        self.collapseProxy = nil;
+    }
+
+    if (upwardPull <= 2.0) {
+        if (self.active) {
+            [self db_renderNeckProgress:0.0 attachY:cardTopY + 10.0 cardMidX:cardMidX cardWidth:cardWidth];
+        }
+        return;
+    }
+
+    if (![self db_ensureOverlayForWindow:win tintColor:tintColor]) return;
+
+    CGFloat reachDistance = (CGFloat)(52.0 / fmax(0.5, gMagneticNeckStrength));
+    CGFloat pullProg = (CGFloat)DBClamp01(upwardPull / reachDistance);
+    CGFloat islandBottomY = CGRectGetMaxY(self.cutoutRect) - 4.0;
+    CGFloat gap = fmax(0.0, cardTopY - islandBottomY);
+    CGFloat proximityProg = (CGFloat)DBClamp01(1.0 - (gap / (54.0 * fmax(0.6, gMagneticNeckStrength))));
+    CGFloat combinedProg = (CGFloat)DBClamp01(fmax(pullProg, pullProg * 0.55 + proximityProg * 0.45));
+
+    if (gHapticsEnabled && self.hapticGenerator && !self.latchHapticFired && combinedProg >= 0.48) {
+        self.latchHapticFired = YES;
+        [self.hapticGenerator impactOccurred];
+    }
+
+    self.trackedCard = cardView;
+    self.lastPullProgress = combinedProg;
+    self.lastAttachY = cardTopY + 12.0;
+    self.lastCardMidX = cardMidX;
+    self.lastCardWidth = cardWidth;
+
+    [self db_renderNeckProgress:combinedProg attachY:self.lastAttachY cardMidX:cardMidX cardWidth:cardWidth];
+}
+
+- (void)db_handleBannerPan:(UIPanGestureRecognizer *)pan {
+    if (!gMagneticSwipeNeckEnabled || DBShouldSkipGlobally()) {
+        if (self.active) [self cancelImmediate];
+        return;
+    }
+    // Never overlap with an active entry or exit droplet animation
+    if (gActiveAnimator) return;
+
+    UIView *cardView = pan.view;
+    UIWindow *win = cardView.window;
+    if (!cardView || !win) {
+        if (self.active) [self cancelImmediate];
+        return;
+    }
+
+    if (pan.state == UIGestureRecognizerStateBegan) {
+        self.startCardRect = [cardView convertRect:cardView.bounds toCoordinateSpace:win.coordinateSpace];
+        return;
+    }
+
+    if (pan.state == UIGestureRecognizerStateChanged) {
+        CGPoint trans = [pan translationInView:win];
+        CGFloat upwardPull = -trans.y;
+
+        CGRect liveRect = [cardView convertRect:cardView.bounds toCoordinateSpace:win.coordinateSpace];
+        if (cardView.layer.presentationLayer && win.layer.presentationLayer) {
+            CGRect presRect = [cardView.layer.presentationLayer convertRect:cardView.layer.presentationLayer.bounds
+                                                                    toLayer:win.layer.presentationLayer];
+            if (!CGRectIsEmpty(presRect) && presRect.size.width >= 120.0) {
+                liveRect = presRect;
+            }
+        }
+        // If BannerKit hasn't moved the layer yet on the first drag pixels, approximate smoothly from translation
+        CGFloat cardTopY = liveRect.origin.y;
+        if (!CGRectIsEmpty(self.startCardRect) && fabs(cardTopY - self.startCardRect.origin.y) < 1.0 && upwardPull > 2.0) {
+            cardTopY = self.startCardRect.origin.y - upwardPull * 0.55;
+        }
+
+        UIColor *tint = nil;
+        if (gDropletColorMode == DBDropletColorModeCustom) {
+            tint = gCustomDropletColor ?: [UIColor systemBlueColor];
+        } else if (gDropletColorMode == DBDropletColorModeAppIcon) {
+            tint = objc_getAssociatedObject(cardView, kDBViewDropletColorKey);
+        }
+
+        [self updateInteractiveCard:cardView
+                             window:win
+                         upwardPull:upwardPull
+                           cardTopY:cardTopY
+                           cardMidX:CGRectGetMidX(liveRect)
+                          cardWidth:CGRectGetWidth(liveRect)
+                          tintColor:tint];
+        return;
+    }
+
+    if (pan.state == UIGestureRecognizerStateEnded ||
+        pan.state == UIGestureRecognizerStateCancelled ||
+        pan.state == UIGestureRecognizerStateFailed) {
+        if (self.active) {
+            [self beginCollapse];
+        }
+    }
+}
+
+- (void)beginCollapse {
+    if (!self.active || !self.overlayWindow) {
+        [self cancelImmediate];
+        return;
+    }
+    if (self.collapseLink) {
+        [self.collapseLink invalidate];
+        self.collapseLink = nil;
+    }
+    self.collapseStartProgress = self.lastPullProgress;
+    self.collapseStartedAt = CACurrentMediaTime();
+    self.collapseProxy = [[DBMagneticLinkProxy alloc] init];
+    self.collapseProxy.owner = self;
+    self.collapseLink = [CADisplayLink displayLinkWithTarget:self.collapseProxy selector:@selector(tickCollapse:)];
+    if (@available(iOS 15.0, *)) {
+        self.collapseLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+    }
+    [self.collapseLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+- (void)db_tickCollapse:(CADisplayLink *)link {
+    CFTimeInterval elapsed = CACurrentMediaTime() - self.collapseStartedAt;
+    double p = DBClamp01(elapsed / 0.18);
+    if (p >= 1.0) {
+        [self cancelImmediate];
+        return;
+    }
+    double rem = (1.0 - p) * (1.0 - p);
+    [self db_renderNeckProgress:(CGFloat)(self.collapseStartProgress * rem)
+                        attachY:self.lastAttachY
+                       cardMidX:self.lastCardMidX
+                      cardWidth:self.lastCardWidth];
+}
+
+- (void)cancelImmediate {
+    if (self.collapseLink) {
+        [self.collapseLink invalidate];
+        self.collapseLink = nil;
+    }
+    self.collapseProxy = nil;
+    self.hapticGenerator = nil;
+    self.active = NO;
+    self.latchHapticFired = NO;
+    self.lastPullProgress = 0.0;
+
+    if (self.motionAcquired) {
+        self.motionAcquired = NO;
+        [[DBMotionTracker shared] releaseMotion];
+    }
+
+    [UIView performWithoutAnimation:^{
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+
+        if (self.neckGradientLayer) {
+            [self.neckGradientLayer removeFromSuperlayer];
+            self.neckGradientLayer = nil;
+        }
+        self.neckMaskLayer = nil;
+        if (self.islandPulseLayer) {
+            [self.islandPulseLayer removeFromSuperlayer];
+            self.islandPulseLayer = nil;
+        }
+        if (self.overlayWindow) {
+            self.overlayWindow.hidden = YES;
+            self.overlayWindow.rootViewController = nil;
+            self.overlayWindow = nil;
+        }
+        self.canvasView = nil;
+
+        [CATransaction commit];
+    }];
+
+    self.trackedCard = nil;
+    self.sourceWindow = nil;
+}
+
+@end
+
 #pragma mark - Built-In Live Preview Banner (Triggered From Settings)
 
 @interface DBPreviewBannerWindow : UIWindow
@@ -1329,6 +1896,8 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 @property (nonatomic, assign) NSUInteger token;
 @property (nonatomic, assign) NSUInteger sampleIndex;
 @property (nonatomic, assign) BOOL dismissing;
+@property (nonatomic, assign) BOOL dragging;
+@property (nonatomic, assign) CGRect restingCardFrame;
 + (instancetype)shared;
 - (void)showPreview;
 - (void)dismissPreviewFromSwipe:(BOOL)fromSwipe;
@@ -1368,8 +1937,65 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     self.dismissing = NO;
 }
 
-- (void)handleSwipeUp:(UISwipeGestureRecognizer *)gesture {
-    [self dismissPreviewFromSwipe:YES];
+- (void)handlePreviewPan:(UIPanGestureRecognizer *)pan {
+    if (self.dismissing || !self.previewCard || !self.previewWindow) return;
+    if (gActiveAnimator) return;
+
+    UIView *card = self.previewCard;
+    UIWindow *win = self.previewWindow;
+
+    UIColor *activeTint = nil;
+    if (gDropletColorMode == DBDropletColorModeAppIcon) {
+        activeTint = self.sampleColor;
+    } else if (gDropletColorMode == DBDropletColorModeCustom) {
+        activeTint = gCustomDropletColor ?: [UIColor systemBlueColor];
+    }
+
+    if (pan.state == UIGestureRecognizerStateBegan) {
+        self.dragging = YES;
+        return;
+    }
+
+    if (pan.state == UIGestureRecognizerStateChanged) {
+        CGPoint trans = [pan translationInView:win];
+        CGFloat dy = trans.y;
+        // Rubber-band downward drags; follow upward drags smoothly toward the Dynamic Island
+        CGFloat visualDy = (dy < 0.0) ? fmax(-68.0, dy * 0.78) : fmin(16.0, dy * 0.25);
+        card.transform = CGAffineTransformMakeTranslation(0.0, visualDy);
+
+        CGFloat liveTopY = self.restingCardFrame.origin.y + visualDy;
+        [[DBMagneticNeckController shared] updateInteractiveCard:card
+                                                          window:win
+                                                      upwardPull:fmax(0.0, -dy)
+                                                        cardTopY:liveTopY
+                                                        cardMidX:CGRectGetMidX(self.restingCardFrame)
+                                                       cardWidth:CGRectGetWidth(self.restingCardFrame)
+                                                       tintColor:activeTint];
+        return;
+    }
+
+    if (pan.state == UIGestureRecognizerStateEnded ||
+        pan.state == UIGestureRecognizerStateCancelled ||
+        pan.state == UIGestureRecognizerStateFailed) {
+        self.dragging = NO;
+        CGPoint trans = [pan translationInView:win];
+        CGPoint vel = [pan velocityInView:win];
+        if (trans.y < -26.0 || vel.y < -240.0) {
+            [[DBMagneticNeckController shared] cancelImmediate];
+            [self dismissPreviewFromSwipe:YES];
+        } else {
+            [[DBMagneticNeckController shared] beginCollapse];
+            [UIView animateWithDuration:0.32 delay:0.0 usingSpringWithDamping:0.78 initialSpringVelocity:0.5 options:0 animations:^{
+                card.transform = CGAffineTransformIdentity;
+            } completion:nil];
+            NSUInteger myToken = self.token;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                if (self.token == myToken && !self.dismissing && !self.dragging && self.previewWindow) {
+                    [self dismissPreviewFromSwipe:NO];
+                }
+            });
+        }
+    }
 }
 
 - (void)handleTap:(UITapGestureRecognizer *)gesture {
@@ -1465,14 +2091,13 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     [bg.contentView addSubview:timeLabel];
 
     UILabel *bodyLabel = [[UILabel alloc] initWithFrame:CGRectMake(66.0, 39.0, cardW - 82.0, 20.0)];
-    bodyLabel.text = @"Live preview — swipe up or wait to retract";
+    bodyLabel.text = @"Drag up for magnetic neck • tilt for gyro";
     bodyLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightRegular];
     bodyLabel.textColor = [UIColor secondaryLabelColor];
     [bg.contentView addSubview:bodyLabel];
 
-    UISwipeGestureRecognizer *swipeUp = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(handleSwipeUp:)];
-    swipeUp.direction = UISwipeGestureRecognizerDirectionUp;
-    [card addGestureRecognizer:swipeUp];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePreviewPan:)];
+    [card addGestureRecognizer:pan];
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
     [card addGestureRecognizer:tap];
@@ -1481,7 +2106,9 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     win.interactiveCard = card;
     self.previewWindow = win;
     self.previewCard = card;
+    self.restingCardFrame = card.frame;
     self.dismissing = NO;
+    self.dragging = NO;
 
     UIColor *activeTint = nil;
     if (gDropletColorMode == DBDropletColorModeAppIcon) {
@@ -1504,8 +2131,8 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
         } completion:nil];
     }
 
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (self.token == myToken && !self.dismissing && self.previewWindow) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (self.token == myToken && !self.dismissing && !self.dragging && self.previewWindow) {
             [self dismissPreviewFromSwipe:NO];
         }
     });
@@ -1514,6 +2141,8 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 - (void)dismissPreviewFromSwipe:(BOOL)fromSwipe {
     if (self.dismissing || !self.previewWindow || !self.previewCard) return;
     self.dismissing = YES;
+    self.dragging = NO;
+    [[DBMagneticNeckController shared] cancelImmediate];
 
     NSUInteger myToken = self.token;
     UIView *card = self.previewCard;
@@ -1620,11 +2249,14 @@ static void DBLaunchEntryForView(UIView *view, id sourceObj) {
     }
     objc_setAssociatedObject(view, kDBViewEntryTimestampKey, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
+    [[DBMagneticNeckController shared] cancelImmediate];
     if (gActiveAnimator) {
         [gActiveAnimator stop];
     }
 
     UIColor *dropColor = DBResolveDropletColor(sourceObj, view);
+    [[DBMagneticNeckController shared] attachToBannerView:view dropletColor:dropColor];
+
     DBDropletAnimator *animator = [[DBDropletAnimator alloc] init];
     gActiveAnimator = animator;
     [animator startEntryForView:view dropletColor:dropColor];
@@ -1711,6 +2343,7 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
         BOOL newerIncoming = (gLatestPresentable && gLatestPresentable != presentable &&
                               ((gActiveAnimator && !gActiveAnimator.exiting) || (now - gLatestEntryRequestTime < 0.45)));
 
+        [[DBMagneticNeckController shared] cancelImmediate];
         if (isTapOrExpand) {
             if (gActiveAnimator) {
                 [gActiveAnimator stop];

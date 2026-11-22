@@ -652,6 +652,8 @@ static NSString *DBPrefsHexFromColor(UIColor *color) {
             @"DropletColorMode", @"TintDropletWithAppIcon", @"CustomDropletColorHex",
             @"BloomRimEnabled", @"BloomRimWidth", @"BloomRimDuration",
             @"IslandRecoilEnabled", @"IslandRecoilIntensity",
+            @"MagneticSwipeNeckEnabled", @"MagneticNeckStrength",
+            @"GyroCurveEnabled", @"GyroCurveIntensity",
             @"HapticsEnabled", @"HapticStrength",
             @"PauseInLowPowerMode", @"PauseInLandscape",
             @"ExcludedAppsEnabled", @"ExcludedBundleIDs"
@@ -695,7 +697,7 @@ static NSString *DBPrefsHexFromColor(UIColor *color) {
 
     UILabel *subLabel = [[UILabel alloc] init];
     subLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    subLabel.text = @"Dynamic Island Droplet Notifications • v1.8.0";
+    subLabel.text = @"Dynamic Island Droplet Notifications • v1.9.0";
     subLabel.font = [UIFont systemFontOfSize:12.5 weight:UIFontWeightRegular];
     subLabel.textColor = [UIColor secondaryLabelColor];
     subLabel.textAlignment = NSTextAlignmentCenter;

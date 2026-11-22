@@ -314,6 +314,102 @@
             <string>com.billie.dropletbanner/prefsChanged</string>
         </dict>
 
+        <!-- Magnetic Swipe-Up Neck -->
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Magnetic Swipe-Up Neck</string>
+            <key>footerText</key>
+            <string>Stretches a live liquid bridge down from the Dynamic Island as you drag a notification banner upward before snapping it back inside.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>MagneticSwipeNeckEnabled</string>
+            <key>label</key>
+            <string>Enable Magnetic Swipe-Up Neck</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Magnetic Reach Strength</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSliderCell</string>
+            <key>default</key>
+            <real>1.0</real>
+            <key>min</key>
+            <real>0.5</real>
+            <key>max</key>
+            <real>2.0</real>
+            <key>showValue</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>MagneticNeckStrength</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+
+        <!-- Gyro-Reactive Droplet Curve -->
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Gyro-Reactive Droplet Curve</string>
+            <key>footerText</key>
+            <string>Samples device tilt only during active droplet animations so the teardrop and liquid neck sway naturally with gravity at zero idle battery cost.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>GyroCurveEnabled</string>
+            <key>label</key>
+            <string>Enable Gyro-Reactive Curve</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Gyro Tilt Sensitivity</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSliderCell</string>
+            <key>default</key>
+            <real>1.0</real>
+            <key>min</key>
+            <real>0.3</real>
+            <key>max</key>
+            <real>2.0</real>
+            <key>showValue</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>GyroCurveIntensity</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+
         <!-- Neck-Snap Micro-Haptic -->
         <dict>
             <key>cell</key>

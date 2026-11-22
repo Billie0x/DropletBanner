@@ -8,7 +8,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = DropletBanner
 DropletBanner_FILES = Tweak.x
 DropletBanner_CFLAGS = -fobjc-arc -Wall
-DropletBanner_FRAMEWORKS = UIKit QuartzCore CoreGraphics CoreFoundation
+DropletBanner_FRAMEWORKS = UIKit QuartzCore CoreGraphics CoreFoundation CoreMotion
 
 SUBPROJECTS += dropletbannerprefs
 
