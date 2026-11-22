@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>title</key>
+    <string>DropletBanner</string>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Dynamic Island Notifications</string>
+            <key>footerText</key>
+            <string>Animates incoming notification banners out of the Dynamic Island or notch while retaining native content, actions, sounds, and haptics. Changes apply instantly without respringing.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.custom.dropletbanner</string>
+            <key>key</key>
+            <string>Enabled</string>
+            <key>label</key>
+            <string>Enable Droplet Banner</string>
+            <key>PostNotification</key>
+            <string>com.custom.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.custom.dropletbanner</string>
+            <key>key</key>
+            <string>AnimateDismiss</string>
+            <key>label</key>
+            <string>Retract on Auto-Dismiss</string>
+            <key>PostNotification</key>
+            <string>com.custom.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Animation Duration (Seconds)</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSliderCell</string>
+            <key>default</key>
+            <real>0.48</real>
+            <key>min</key>
+            <real>0.25</real>
+            <key>max</key>
+            <real>0.85</real>
+            <key>showValue</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.custom.dropletbanner</string>
+            <key>key</key>
+            <string>EntryDuration</string>
+            <key>PostNotification</key>
+            <string>com.custom.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Droplet Elasticity</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSliderCell</string>
+            <key>default</key>
+            <real>1.0</real>
+            <key>min</key>
+            <real>0.4</real>
+            <key>max</key>
+            <real>1.5</real>
+            <key>showValue</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.custom.dropletbanner</string>
+            <key>key</key>
+            <string>DropletAmplitude</string>
+            <key>PostNotification</key>
+            <string>com.custom.dropletbanner/prefsChanged</string>
+        </dict>
+    </array>
+</dict>
+</plist>
