@@ -24,7 +24,6 @@
 
 static NSString *const kPrefsDomain = @"com.custom.dropletbanner";
 static NSString *const kPrefsChangedNotification = @"com.custom.dropletbanner/prefsChanged";
-static NSString *const kOpacityAnimKey = @"DBDropletNativeOpacity";
 
 static BOOL gEnabled = YES;
 static BOOL gAnimateDismiss = YES;
@@ -51,7 +50,7 @@ static void DBPrefsChangedCallback(CFNotificationCenterRef center, void *observe
     DBLoadPreferences();
 }
 
-#pragma mark - Exact Lunora Droplet Spring Math
+#pragma mark - Droplet Spring & Geometry Helpers
 
 static inline double DBClamp01(double x) {
     return x < 0.0 ? 0.0 : (x > 1.0 ? 1.0 : x);
@@ -61,7 +60,6 @@ static inline double DBLerp(double a, double b, double t) {
     return a + (b - a) * t;
 }
 
-// Damped spring curve matching Lunora's IDIIslandNotificationAnimator
 static inline double DBSpringCurve(double u, double decay, double freq, double sinAmp) {
     if (u <= 0.0) return 0.0;
     if (u >= 1.0) return 1.0;
@@ -93,7 +91,6 @@ static CGRect DBResolveCutoutRectForWindow(UIWindow *window) {
     return CGRectMake(midX - fallbackW * 0.5, 4.0, fallbackW, fallbackH);
 }
 
-// Find the actual banner card view (never a full-screen wrapper)
 static UIView *DBFindCardView(UIView *root, UIWindow *win) {
     if (!root || !win) return root;
     CGSize winSize = win.bounds.size;
@@ -124,9 +121,21 @@ static UIView *DBFindCardView(UIView *root, UIWindow *win) {
     return root;
 }
 
-// Walk up to the top-most non-fullscreen banner container so hiding opacity hides the entire stock banner + platter
-static UIView *DBFindNativeSurface(UIView *cardView, UIWindow *win) {
+// Resolve the outer BannerKit container view so hiding it masks the entire native banner,
+// including iOS 26 Liquid Glass platters, portals, and drop shadows.
+static UIView *DBFindHideContainer(UIView *cardView, UIWindow *win) {
     if (!cardView || !win) return cardView;
+    NSString *winClass = NSStringFromClass(win.class);
+    BOOL isDedicatedBannerWindow = (winClass && [winClass localizedCaseInsensitiveContainsString:@"banner"]);
+
+    if (isDedicatedBannerWindow) {
+        UIView *branch = cardView;
+        while (branch.superview && branch.superview != win) {
+            branch = branch.superview;
+        }
+        return branch ?: cardView;
+    }
+
     CGSize winSize = win.bounds.size;
     UIView *surface = cardView;
     UIView *cur = cardView.superview;
@@ -188,12 +197,11 @@ static UIImage *DBSnapshotView(UIView *view) {
 - (void)tick:(CADisplayLink *)link;
 @end
 
-#pragma mark - Droplet Animator (Pure Shape Layers — No Extra Glass)
+#pragma mark - Droplet Animator
 
 @interface DBDropletAnimator : NSObject
 @property (nonatomic, weak) UIView *contentView;
-@property (nonatomic, weak) UIView *nativeSurface;
-@property (nonatomic, weak) CALayer *maskedNativeLayer;
+@property (nonatomic, weak) UIView *hideContainer;
 @property (nonatomic, weak) UIWindow *sourceWindow;
 @property (nonatomic, strong) DBDropletEffectWindow *effectWindow;
 @property (nonatomic, strong) UIView *canvasView;
@@ -209,6 +217,8 @@ static UIImage *DBSnapshotView(UIView *view) {
 @property (nonatomic, assign) CGRect cutoutRect;
 @property (nonatomic, assign) CGRect cardRect;
 @property (nonatomic, assign) CGFloat cardCornerRadius;
+@property (nonatomic, assign) CGRect cachedRestingCardRect;
+@property (nonatomic, assign) CGFloat cachedCornerRadius;
 - (void)startEntryForView:(UIView *)view;
 - (void)startExitForView:(UIView *)view;
 - (void)tick:(CADisplayLink *)link;
@@ -234,95 +244,127 @@ static UIImage *DBSnapshotView(UIView *view) {
     }
     self.proxy = nil;
 
-    if (self.maskedNativeLayer) {
-        [self.maskedNativeLayer removeAnimationForKey:kOpacityAnimKey];
-        self.maskedNativeLayer = nil;
-    }
+    [UIView performWithoutAnimation:^{
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
 
-    if (self.exitSnapshotView) {
-        [self.exitSnapshotView removeFromSuperview];
-        self.exitSnapshotView = nil;
-    }
-    if (self.bodyLayer) {
-        [self.bodyLayer removeFromSuperlayer];
-        self.bodyLayer = nil;
-    }
-    if (self.neckLayer) {
-        [self.neckLayer removeFromSuperlayer];
-        self.neckLayer = nil;
-    }
-    if (self.effectWindow) {
-        self.effectWindow.hidden = YES;
-        self.effectWindow.rootViewController = nil;
-        self.effectWindow = nil;
-    }
-    self.canvasView = nil;
+        if (self.hideContainer) {
+            self.hideContainer.hidden = NO;
+            self.hideContainer.alpha = 1.0;
+            self.hideContainer = nil;
+        }
+        if (self.contentView) {
+            self.contentView.hidden = NO;
+            self.contentView.alpha = 1.0;
+            self.contentView = nil;
+        }
+        if (self.exitSnapshotView) {
+            [self.exitSnapshotView removeFromSuperview];
+            self.exitSnapshotView = nil;
+        }
+        if (self.bodyLayer) {
+            [self.bodyLayer removeFromSuperlayer];
+            self.bodyLayer = nil;
+        }
+        if (self.neckLayer) {
+            [self.neckLayer removeFromSuperlayer];
+            self.neckLayer = nil;
+        }
+        if (self.effectWindow) {
+            self.effectWindow.hidden = YES;
+            self.effectWindow.rootViewController = nil;
+            self.effectWindow = nil;
+        }
+        self.canvasView = nil;
+
+        [CATransaction commit];
+    }];
 }
 
-- (BOOL)setupOverlayForView:(UIView *)rawView {
+- (BOOL)setupOverlayForView:(UIView *)rawView isExit:(BOOL)isExit {
     UIWindow *win = rawView.window;
     if (!win) return NO;
 
     CGSize winSize = win.bounds.size;
-    // Portrait only; preserve stock animation in landscape
+    // Portrait only; keep native animation in landscape
     if (winSize.width > winSize.height || winSize.width < 250.0) return NO;
 
     UIView *cardView = DBFindCardView(rawView, win);
     if (!cardView) return NO;
 
-    UIView *surface = DBFindNativeSurface(cardView, win);
-
+    UIView *container = DBFindHideContainer(cardView, win);
     CGRect cutout = DBResolveCutoutRectForWindow(win);
+
     CGRect frameInWin = [cardView convertRect:cardView.bounds toCoordinateSpace:win.coordinateSpace];
+
+    // If BannerKit already started moving/resizing the card during dismiss, reuse the cached resting rect
+    if (isExit && !CGRectIsEmpty(self.cachedRestingCardRect) &&
+        (CGRectIsEmpty(frameInWin) || frameInWin.size.width < winSize.width * 0.55 || frameInWin.origin.y < CGRectGetMaxY(cutout))) {
+        frameInWin = self.cachedRestingCardRect;
+    }
+
     if (CGRectIsEmpty(frameInWin) || frameInWin.size.width < 120.0 || frameInWin.size.height < 34.0) {
         return NO;
     }
 
-    // If BannerKit hasn't placed the model frame below the Island yet, target the standard resting Y
+    // Clamp to true resting Y below the Dynamic Island and enforce horizontal centering in portrait
     CGFloat minRestingY = CGRectGetMaxY(cutout) + 10.0;
     if (frameInWin.origin.y < minRestingY - 4.0) {
         frameInWin.origin.y = minRestingY;
     }
+    frameInWin.origin.x = round((winSize.width - frameInWin.size.width) * 0.5);
+
+    CGFloat cornerR = DBResolveCornerRadius(cardView);
+    if (!isExit) {
+        self.cachedRestingCardRect = frameInWin;
+        self.cachedCornerRadius = cornerR;
+    } else if (self.cachedCornerRadius >= 14.0) {
+        cornerR = self.cachedCornerRadius;
+    }
 
     self.contentView = cardView;
-    self.nativeSurface = surface ?: cardView;
+    self.hideContainer = container ?: cardView;
     self.sourceWindow = win;
     self.cutoutRect = cutout;
     self.cardRect = frameInWin;
-    self.cardCornerRadius = DBResolveCornerRadius(cardView);
+    self.cardCornerRadius = cornerR;
     self.surfaceColor = [[UIColor secondarySystemBackgroundColor] resolvedColorWithTraitCollection:cardView.traitCollection];
 
-    // Overlay window sitting directly ABOVE the banner window (never blocked by BannerKit)
     DBDropletEffectWindow *overlay = nil;
     if (win.windowScene) {
         overlay = [[DBDropletEffectWindow alloc] initWithWindowScene:win.windowScene];
     } else {
         overlay = [[DBDropletEffectWindow alloc] initWithFrame:win.bounds];
     }
-    overlay.frame = win.coordinateSpace.bounds;
+    overlay.frame = win.bounds;
     overlay.windowLevel = win.windowLevel + 1.0;
     overlay.backgroundColor = [UIColor clearColor];
+    overlay.clipsToBounds = NO;
     overlay.userInteractionEnabled = NO;
     overlay.accessibilityElementsHidden = YES;
 
     UIViewController *rootVC = [[UIViewController alloc] init];
     rootVC.view.backgroundColor = [UIColor clearColor];
+    rootVC.view.clipsToBounds = NO;
     rootVC.view.userInteractionEnabled = NO;
     rootVC.view.frame = overlay.bounds;
     overlay.rootViewController = rootVC;
     [overlay layoutIfNeeded];
 
-    UIView *canvas = [[UIView alloc] initWithFrame:rootVC.view.bounds];
+    UIView *canvas = [[UIView alloc] initWithFrame:overlay.bounds];
     canvas.backgroundColor = [UIColor clearColor];
+    canvas.clipsToBounds = NO;
     canvas.userInteractionEnabled = NO;
     canvas.accessibilityElementsHidden = YES;
     [rootVC.view addSubview:canvas];
 
     CAShapeLayer *neck = [CAShapeLayer layer];
+    neck.frame = canvas.bounds;
     neck.fillColor = [UIColor blackColor].CGColor;
     [canvas.layer addSublayer:neck];
 
     CAShapeLayer *body = [CAShapeLayer layer];
+    body.frame = canvas.bounds;
     body.fillColor = [UIColor blackColor].CGColor;
     [canvas.layer addSublayer:body];
 
@@ -346,65 +388,80 @@ static UIImage *DBSnapshotView(UIView *view) {
 - (void)startEntryForView:(UIView *)view {
     [self stop];
     self.exiting = NO;
-    if (![self setupOverlayForView:view]) return;
 
-    // Default slider (0.48) => snappy 0.92s full spring (drop 0-0.26s, bloom 0.26-0.62s, reveal 0.43-0.70s)
-    double speedScale = gEntryDuration / 0.48;
-    self.duration = fmin(fmax(0.92 * speedScale, 0.55), 1.55);
+    __block BOOL ready = NO;
+    [UIView performWithoutAnimation:^{
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
 
-    // Hide the native banner completely during the droplet drop, then crossfade it in cleanly at resting position
-    CALayer *nativeLayer = self.nativeSurface.layer;
-    self.maskedNativeLayer = nativeLayer;
-    CAKeyframeAnimation *opacityAnim = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
-    opacityAnim.values = @[ @(0.0), @(0.0), @(1.0), @(1.0) ];
-    opacityAnim.keyTimes = @[ @(0.0), @(0.467), @(0.758), @(1.0) ];
-    opacityAnim.duration = self.duration;
-    opacityAnim.removedOnCompletion = YES;
-    [nativeLayer addAnimation:opacityAnim forKey:kOpacityAnimKey];
+        ready = [self setupOverlayForView:view isExit:NO];
+        if (ready) {
+            double speedScale = gEntryDuration / 0.48;
+            self.duration = fmin(fmax(0.88 * speedScale, 0.50), 1.50);
 
-    self.startedAt = CACurrentMediaTime();
-    [self renderNormalizedTime:0.0];
-    self.effectWindow.hidden = NO;
-    [self startDisplayLink];
+            // Completely hide the native banner container until the droplet finishes blooming to full width
+            self.hideContainer.hidden = YES;
+            self.hideContainer.alpha = 0.0;
+
+            self.startedAt = CACurrentMediaTime();
+            [self renderNormalizedTime:0.0];
+            self.effectWindow.hidden = NO;
+        }
+
+        [CATransaction commit];
+    }];
+
+    if (ready) {
+        [self startDisplayLink];
+    }
 }
 
 - (void)startExitForView:(UIView *)view {
     [self stop];
     self.exiting = YES;
-    if (![self setupOverlayForView:view]) return;
 
-    UIImage *snap = DBSnapshotView(self.contentView);
-    if (!snap) {
-        [self stop];
-        return;
+    __block BOOL ready = NO;
+    // Wrap entire exit setup in performWithoutAnimation so BannerKit's dismiss animation
+    // NEVER animates our overlay window frame or clips the retracting droplet.
+    [UIView performWithoutAnimation:^{
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+
+        ready = [self setupOverlayForView:view isExit:YES];
+        if (ready) {
+            UIImage *snap = DBSnapshotView(self.contentView);
+            if (snap) {
+                UIImageView *snapView = [[UIImageView alloc] initWithImage:snap];
+                snapView.frame = self.cardRect;
+                snapView.contentMode = UIViewContentModeScaleToFill;
+                snapView.layer.anchorPoint = CGPointMake(0.5, 0.5);
+                snapView.layer.bounds = CGRectMake(0, 0, self.cardRect.size.width, self.cardRect.size.height);
+                snapView.layer.position = CGPointMake(CGRectGetMidX(self.cardRect), CGRectGetMidY(self.cardRect));
+                snapView.layer.cornerRadius = self.cardCornerRadius;
+                snapView.layer.cornerCurve = kCACornerCurveContinuous;
+                snapView.clipsToBounds = YES;
+                snapView.userInteractionEnabled = NO;
+                [self.canvasView addSubview:snapView];
+                self.exitSnapshotView = snapView;
+            }
+
+            // Hide native banner immediately so stock slide-up never shows behind our retracting droplet
+            self.hideContainer.hidden = YES;
+            self.hideContainer.alpha = 0.0;
+
+            double speedScale = gEntryDuration / 0.48;
+            self.duration = fmin(fmax(0.64 * speedScale, 0.38), 1.10);
+            self.startedAt = CACurrentMediaTime();
+            [self renderNormalizedTime:0.0];
+            self.effectWindow.hidden = NO;
+        }
+
+        [CATransaction commit];
+    }];
+
+    if (ready) {
+        [self startDisplayLink];
     }
-
-    UIImageView *snapView = [[UIImageView alloc] initWithImage:snap];
-    snapView.frame = self.cardRect;
-    snapView.contentMode = UIViewContentModeScaleToFill;
-    snapView.layer.cornerRadius = self.cardCornerRadius;
-    snapView.layer.cornerCurve = kCACornerCurveContinuous;
-    snapView.clipsToBounds = YES;
-    snapView.userInteractionEnabled = NO;
-    [self.canvasView addSubview:snapView];
-    self.exitSnapshotView = snapView;
-
-    double speedScale = gEntryDuration / 0.48;
-    self.duration = fmin(fmax(0.68 * speedScale, 0.40), 1.15);
-
-    CALayer *nativeLayer = self.nativeSurface.layer;
-    self.maskedNativeLayer = nativeLayer;
-    CAKeyframeAnimation *hideAnim = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
-    hideAnim.values = @[ @(0.0), @(0.0) ];
-    hideAnim.keyTimes = @[ @(0.0), @(1.0) ];
-    hideAnim.duration = self.duration + 0.12;
-    hideAnim.removedOnCompletion = YES;
-    [nativeLayer addAnimation:hideAnim forKey:kOpacityAnimKey];
-
-    self.startedAt = CACurrentMediaTime();
-    [self renderNormalizedTime:0.0];
-    self.effectWindow.hidden = NO;
-    [self startDisplayLink];
 }
 
 - (void)tick:(CADisplayLink *)link {
@@ -419,7 +476,7 @@ static UIImage *DBSnapshotView(UIView *view) {
     [self renderNormalizedTime:normT];
 }
 
-// normT is 0.0 -> 1.0; mapped onto Lunora's canonical 0.0 -> 1.2s curve space
+// normT is 0.0 -> 1.0 mapped onto Lunora's canonical 0.0 -> 1.2s curve space
 - (void)renderNormalizedTime:(double)normT {
     double t = DBClamp01(normT) * 1.2;
     double amp = gAmplitude;
@@ -430,50 +487,52 @@ static UIImage *DBSnapshotView(UIView *view) {
     double neckProg = 0.0;
 
     if (!self.exiting) {
-        // ENTRY: drop down first (0.0 -> 1.15), then bloom width (0.34 -> 1.20), then crossfade (0.56 -> 0.91)
+        // ENTRY: drop down first (0.0 -> 1.15), bloom width (0.32 -> 1.18), reveal native card once full width (0.62 -> 0.96)
         yProg = DBSpringCurve(t / 1.15, 7.38, 5.15127, 1.43266);
-        wProg = DBSpringCurve((t - 0.34) / 0.86, 7.20, 5.40, 1.33333);
-        revealProg = DBClamp01((t - 0.56) / 0.35);
+        wProg = DBSpringCurve((t - 0.32) / 0.86, 7.20, 5.40, 1.33333);
+        revealProg = DBClamp01((t - 0.62) / 0.34);
         neckProg = DBSpringCurve((t - 0.11) / 0.70, 8.91, 1.26961, 7.01792);
     } else {
-        // EXIT: fade snapshot (0.0 -> 0.24), squeeze width first (0.10 -> 0.76), then suck up into Island (0.28 -> 1.20)
+        // EXIT: fade snapshot cleanly (0.0 -> 0.24), squeeze width into teardrop (0.08 -> 0.74), pull into Island (0.28 -> 1.20)
         yProg = 1.0 - DBSpringCurve((t - 0.28) / 0.92, 8.10, 3.92301, 2.06474);
-        wProg = 1.0 - DBSpringCurve((t - 0.10) / 0.66, 8.28, 3.52727, 2.34743);
+        wProg = 1.0 - DBSpringCurve((t - 0.08) / 0.66, 8.28, 3.52727, 2.34743);
         revealProg = 1.0 - DBClamp01(t / 0.24);
         neckProg = 1.0 - DBSpringCurve((t - 0.28) / 0.92, 8.10, 3.92301, 2.06474);
     }
 
-    // Vertical liquid teardrop stretch bulge while dropping out of the Dynamic Island
-    double u = DBClamp01(yProg / 0.82);
+    // Clamp slight spring undershoot on width/height so geometry never inverts
+    double clampedWProg = fmax(0.0, wProg);
+    double clampedYProg = fmax(0.0, yProg);
+
+    // Teardrop vertical liquid bulge during stretch
+    double u = DBClamp01(clampedYProg / 0.82);
     double bulge = (pow(u, 1.6) * pow(1.0 - u, 1.4)) / 0.12583674;
     double stretch = 1.0 + (0.38 * amp) * bulge;
 
-    // Compact teardrop base size before horizontal bloom
     double baseDropDiameter = fmin(CGRectGetHeight(self.cutoutRect) * 0.96, CGRectGetHeight(self.cardRect) * 0.72);
-    double dropGrow = 1.0 - pow(1.0 - DBClamp01(yProg / 0.70), 2.0);
+    double dropGrow = 1.0 - pow(1.0 - DBClamp01(clampedYProg / 0.70), 2.0);
     double dropSize = baseDropDiameter * (0.62 + 0.38 * dropGrow);
 
     double dropW = dropSize / stretch;
     double dropH = dropSize * stretch;
 
-    double curW = DBLerp(dropW, CGRectGetWidth(self.cardRect), wProg);
-    double curH = DBLerp(dropH, CGRectGetHeight(self.cardRect), wProg);
+    double curW = fmax(16.0, DBLerp(dropW, CGRectGetWidth(self.cardRect), clampedWProg));
+    double curH = fmax(16.0, DBLerp(dropH, CGRectGetHeight(self.cardRect), clampedWProg));
 
-    // Droplet center Y starts tucked inside the bottom edge of the Dynamic Island and drops to card.midY
     double startMidY = CGRectGetMaxY(self.cutoutRect) - 0.34 * dropH;
     double curMidY = DBLerp(startMidY, CGRectGetMidY(self.cardRect), yProg);
-    double curMidX = DBLerp(CGRectGetMidX(self.cutoutRect), CGRectGetMidX(self.cardRect), wProg);
+    double curMidX = CGRectGetMidX(self.cutoutRect);
 
     CGRect curRect = CGRectMake(curMidX - curW * 0.5, curMidY - curH * 0.5, curW, curH);
     CGFloat maxR = (CGFloat)(fmin(curW, curH) * 0.5);
-    CGFloat curRadius = (CGFloat)fmin(maxR, DBLerp(maxR, self.cardCornerRadius, DBClamp01(wProg)));
+    CGFloat curRadius = (CGFloat)fmin(maxR, DBLerp(maxR, self.cardCornerRadius, DBClamp01(clampedWProg)));
 
     UIBezierPath *bodyPath = [UIBezierPath bezierPathWithRoundedRect:curRect cornerRadius:curRadius];
 
     // Curved black liquid neck bridging Dynamic Island bottom to the dropping teardrop
     double neckVisibility = 0.0;
-    if (yProg > 0.02 && neckProg < 0.94) {
-        double rise = DBClamp01(yProg / 0.18);
+    if (clampedYProg > 0.02 && neckProg < 0.94) {
+        double rise = DBClamp01(clampedYProg / 0.18);
         double snap = 1.0 - DBClamp01((neckProg - 0.25) / 0.69);
         neckVisibility = rise * snap;
     }
@@ -500,45 +559,56 @@ static UIImage *DBSnapshotView(UIView *view) {
         [neckPath closePath];
     }
 
-    // Smoothly transition droplet color from pitch black (Dynamic Island) toward the banner's own dark/light surface tone
+    // Smoothly transition droplet fill from pure black (Dynamic Island) toward banner surface tone
     CGFloat sr = 0.12, sg = 0.12, sb = 0.14, sa = 1.0;
     if (self.surfaceColor) {
         [self.surfaceColor getRed:&sr green:&sg blue:&sb alpha:&sa];
     }
-    double colorBlend = DBClamp01(wProg * 0.85);
+    double colorBlend = DBClamp01(clampedWProg * 0.82);
     UIColor *bodyColor = [UIColor colorWithRed:sr * colorBlend green:sg * colorBlend blue:sb * colorBlend alpha:1.0];
 
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
+    [UIView performWithoutAnimation:^{
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
 
-    self.bodyLayer.path = bodyPath.CGPath;
-    self.bodyLayer.fillColor = bodyColor.CGColor;
+        self.bodyLayer.path = bodyPath.CGPath;
+        self.bodyLayer.fillColor = bodyColor.CGColor;
 
-    if (neckPath) {
-        self.neckLayer.path = neckPath.CGPath;
-        self.neckLayer.fillColor = [UIColor blackColor].CGColor;
-        self.neckLayer.opacity = (float)DBClamp01(neckVisibility * 1.15);
-    } else {
-        self.neckLayer.path = NULL;
-        self.neckLayer.opacity = 0.0f;
-    }
-
-    if (!self.exiting) {
-        // Stay solid during drop + bloom, then cleanly dissolve away as native Liquid Glass banner reveals underneath
-        self.bodyLayer.opacity = (float)DBClamp01(1.0 - revealProg);
-    } else {
-        // Hide droplet at the very end once it completely re-enters the Dynamic Island
-        double endFade = 1.0 - DBClamp01((normT - 0.86) / 0.14);
-        self.bodyLayer.opacity = (float)endFade;
-        if (self.exitSnapshotView) {
-            self.exitSnapshotView.layer.bounds = CGRectMake(0, 0, curW, curH);
-            self.exitSnapshotView.layer.position = CGPointMake(curMidX, curMidY);
-            self.exitSnapshotView.layer.cornerRadius = curRadius;
-            self.exitSnapshotView.layer.opacity = (float)DBClamp01(revealProg);
+        if (neckPath) {
+            self.neckLayer.path = neckPath.CGPath;
+            self.neckLayer.fillColor = [UIColor blackColor].CGColor;
+            self.neckLayer.opacity = (float)DBClamp01(neckVisibility * 1.15);
+        } else {
+            self.neckLayer.path = NULL;
+            self.neckLayer.opacity = 0.0f;
         }
-    }
 
-    [CATransaction commit];
+        if (!self.exiting) {
+            // Keep native banner 100% hidden until droplet has expanded, then crossfade cleanly 1:1
+            if (revealProg <= 0.005) {
+                self.hideContainer.hidden = YES;
+                self.hideContainer.alpha = 0.0;
+            } else {
+                self.hideContainer.hidden = NO;
+                self.hideContainer.alpha = revealProg;
+            }
+            self.bodyLayer.opacity = (float)DBClamp01(1.0 - revealProg);
+        } else {
+            self.hideContainer.hidden = YES;
+            self.hideContainer.alpha = 0.0;
+
+            double endFade = 1.0 - DBClamp01((normT - 0.84) / 0.16);
+            self.bodyLayer.opacity = (float)endFade;
+            if (self.exitSnapshotView) {
+                self.exitSnapshotView.layer.bounds = CGRectMake(0, 0, curW, curH);
+                self.exitSnapshotView.layer.position = CGPointMake(curMidX, curMidY);
+                self.exitSnapshotView.layer.cornerRadius = curRadius;
+                self.exitSnapshotView.layer.opacity = (float)DBClamp01(revealProg);
+            }
+        }
+
+        [CATransaction commit];
+    }];
 }
 
 @end
@@ -546,6 +616,7 @@ static UIImage *DBSnapshotView(UIView *view) {
 #pragma mark - Banner View Extraction & Deduplication
 
 static DBDropletAnimator *gActiveAnimator = nil;
+static __weak UIView *gLastAnimatedView = nil;
 static CFTimeInterval gLastTriggerTime = 0.0;
 
 static BOOL DBIsBannerViewController(UIViewController *vc) {
@@ -598,7 +669,9 @@ static UIView *DBExtractBannerViewFromPresentable(id<BNPresentable> presentable)
 
 static void DBTriggerEntryIfReady(UIView *view) {
     CFTimeInterval now = CACurrentMediaTime();
-    if (now - gLastTriggerTime < 0.25) return;
+    // Deduplicate only if the exact same banner view fires twice from both hooks
+    if (view == gLastAnimatedView && (now - gLastTriggerTime < 0.35)) return;
+    gLastAnimatedView = view;
     gLastTriggerTime = now;
 
     if (!gActiveAnimator) {
@@ -614,7 +687,7 @@ static void DBScheduleEntryForPresentable(id<BNPresentable> presentable, NSInteg
         return;
     }
     if (attempt < 10) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.016 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.012 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             DBScheduleEntryForPresentable(presentable, attempt + 1);
         });
     }
@@ -629,7 +702,7 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
         return;
     }
     if (attempt < 10) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.016 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.012 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             DBScheduleEntryForViewController(vc, attempt + 1);
         });
     }
@@ -643,9 +716,14 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
     %orig;
     if (!gEnabled || UIAccessibilityIsReduceMotionEnabled()) return;
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        DBScheduleEntryForPresentable(presentable, 0);
-    });
+    UIView *bannerView = DBExtractBannerViewFromPresentable(presentable);
+    if (bannerView && bannerView.window && !CGRectIsEmpty(bannerView.bounds)) {
+        DBTriggerEntryIfReady(bannerView);
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            DBScheduleEntryForPresentable(presentable, 0);
+        });
+    }
 }
 
 - (void)presentableWillDisappearAsBanner:(id<BNPresentable>)presentable withReason:(NSString *)reason {
@@ -677,9 +755,14 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
     %orig;
     if (!gEnabled || UIAccessibilityIsReduceMotionEnabled()) return;
 
-    dispatch_async(dispatch_get_main_queue(), ^{
-        DBScheduleEntryForViewController(self, 0);
-    });
+    UIView *v = self.viewIfLoaded;
+    if (v && v.window && !CGRectIsEmpty(v.bounds) && DBIsBannerViewController(self)) {
+        DBTriggerEntryIfReady(v);
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            DBScheduleEntryForViewController(self, 0);
+        });
+    }
 }
 
 %end
