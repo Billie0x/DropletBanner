@@ -81,3 +81,6 @@ make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide
 
 # Build for Rootless (iphoneos-arm64)
 make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+
+Credits
+Developer: Billie (@Billie0x)
