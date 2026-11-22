@@ -6,7 +6,7 @@
 
 **Fluid Dynamic Island & notch liquid droplet animations for native iOS notification banners.**
 
-![Version](https://img.shields.io/badge/Version-1.8.0-0A84FF?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-1.9.0-0A84FF?style=for-the-badge)
 ![iOS](https://img.shields.io/badge/iOS-15.0%2B-1C1C1E?style=for-the-badge&logo=apple&logoColor=white)
 ![Architecture](https://img.shields.io/badge/RootHide%20%7C%20Rootless-arm64e%20%2F%20arm64-30D158?style=for-the-badge)
 ![Package](https://img.shields.io/badge/Package-com.billie.dropletbanner-5856D6?style=for-the-badge)
