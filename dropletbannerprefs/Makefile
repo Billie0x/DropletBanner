@@ -12,4 +12,11 @@ DropletBannerPrefs_CFLAGS = -fobjc-arc -Wall
 
 include $(THEOS_MAKE_PATH)/bundle.mk
 
-internal-stage:: ; mkdir -p $(THEOS_STAGING_DIR)$(THEOS_PACKAGE_INSTALL_PREFIX)/Library/PreferenceLoader/Preferences/DropletBanner && cp entry.plist $(THEOS_STAGING_DIR)$(THEOS_PACKAGE_INSTALL_PREFIX)/Library/PreferenceLoader/Preferences/DropletBanner/Root.plist && cp Resources/icon.png Resources/icon@2x.png Resources/icon@3x.png $(THEOS_STAGING_DIR)$(THEOS_PACKAGE_INSTALL_PREFIX)/Library/PreferenceLoader/Preferences/DropletBanner/
+# THEOS_STAGING_DIR already includes the scheme prefix (e.g. /var/jb for rootless),
+# so paths here must not add $(THEOS_PACKAGE_INSTALL_PREFIX) again.
+PREFLOADER_DIR = $(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/DropletBanner
+
+internal-stage::
+	$(ECHO_NOTHING)mkdir -p "$(PREFLOADER_DIR)"$(ECHO_END)
+	$(ECHO_NOTHING)cp entry.plist "$(PREFLOADER_DIR)/Root.plist"$(ECHO_END)
+	$(ECHO_NOTHING)cp Resources/icon.png Resources/icon@2x.png Resources/icon@3x.png "$(PREFLOADER_DIR)/"$(ECHO_END)
