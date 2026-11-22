@@ -547,4 +547,5 @@ static void DBScheduleEntryAnimation(id<BNPresentable> presentable, NSInteger at
         NULL,
         CFNotificationSuspensionBehaviorDeliverImmediately
     );
+    %init;
 }
