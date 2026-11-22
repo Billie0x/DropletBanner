@@ -12,7 +12,7 @@
             <key>label</key>
             <string>Dynamic Island Notifications</string>
             <key>footerText</key>
-            <string>Animates incoming notification banners out of the Dynamic Island or notch while retaining native content, actions, sounds, and haptics. Changes apply instantly without respringing.</string>
+            <string>Animates incoming notification banners out of the Dynamic Island or notch and retracts them back on dismiss while retaining native content, actions, sounds, and haptics. Changes apply instantly without respringing.</string>
         </dict>
         <dict>
             <key>cell</key>
@@ -20,13 +20,13 @@
             <key>default</key>
             <true/>
             <key>defaults</key>
-            <string>com.custom.dropletbanner</string>
+            <string>com.billie.dropletbanner</string>
             <key>key</key>
             <string>Enabled</string>
             <key>label</key>
             <string>Enable Droplet Banner</string>
             <key>PostNotification</key>
-            <string>com.custom.dropletbanner/prefsChanged</string>
+            <string>com.billie.dropletbanner/prefsChanged</string>
         </dict>
         <dict>
             <key>cell</key>
@@ -34,13 +34,13 @@
             <key>default</key>
             <true/>
             <key>defaults</key>
-            <string>com.custom.dropletbanner</string>
+            <string>com.billie.dropletbanner</string>
             <key>key</key>
             <string>AnimateDismiss</string>
             <key>label</key>
-            <string>Retract on Auto-Dismiss</string>
+            <string>Retract on Dismiss</string>
             <key>PostNotification</key>
-            <string>com.custom.dropletbanner/prefsChanged</string>
+            <string>com.billie.dropletbanner/prefsChanged</string>
         </dict>
         <dict>
             <key>cell</key>
@@ -60,11 +60,11 @@
             <key>showValue</key>
             <true/>
             <key>defaults</key>
-            <string>com.custom.dropletbanner</string>
+            <string>com.billie.dropletbanner</string>
             <key>key</key>
             <string>EntryDuration</string>
             <key>PostNotification</key>
-            <string>com.custom.dropletbanner/prefsChanged</string>
+            <string>com.billie.dropletbanner/prefsChanged</string>
         </dict>
         <dict>
             <key>cell</key>
@@ -84,11 +84,11 @@
             <key>showValue</key>
             <true/>
             <key>defaults</key>
-            <string>com.custom.dropletbanner</string>
+            <string>com.billie.dropletbanner</string>
             <key>key</key>
             <string>DropletAmplitude</string>
             <key>PostNotification</key>
-            <string>com.custom.dropletbanner/prefsChanged</string>
+            <string>com.billie.dropletbanner/prefsChanged</string>
         </dict>
         <dict>
             <key>cell</key>

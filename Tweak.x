@@ -22,8 +22,8 @@
 
 #pragma mark - Preferences
 
-static NSString *const kPrefsDomain = @"com.custom.dropletbanner";
-static NSString *const kPrefsChangedNotification = @"com.custom.dropletbanner/prefsChanged";
+static NSString *const kPrefsDomain = @"com.billie.dropletbanner";
+static NSString *const kPrefsChangedNotification = @"com.billie.dropletbanner/prefsChanged";
 
 static BOOL gEnabled = YES;
 static BOOL gAnimateDismiss = YES;
@@ -91,7 +91,6 @@ static CGRect DBResolveCutoutRectForWindow(UIWindow *window) {
     return CGRectMake(midX - fallbackW * 0.5, 4.0, fallbackW, fallbackH);
 }
 
-// Find the actual notification card view (never a full-screen wrapper, and never skipped if temporarily hidden/faded)
 static UIView *DBFindCardView(UIView *root, UIWindow *win) {
     if (!root || !win) return root;
     CGSize winSize = win.bounds.size;
@@ -120,8 +119,6 @@ static UIView *DBFindCardView(UIView *root, UIWindow *win) {
     return root;
 }
 
-// Walk up ONLY through banner-sized wrappers for THIS notification.
-// Never climb to the full-screen BNBannerWindow root so hiding notification A can never hide notification B.
 static UIView *DBFindPerBannerContainer(UIView *cardView, UIWindow *win) {
     if (!cardView || !win) return cardView;
     CGSize winSize = win.bounds.size;
@@ -217,7 +214,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 @property (nonatomic, assign) CGRect cardRect;
 @property (nonatomic, assign) CGFloat cardCornerRadius;
 - (void)startEntryForView:(UIView *)view;
-- (void)startExitForView:(UIView *)view;
+- (void)startExitForView:(UIView *)view fromSwipe:(BOOL)fromSwipe;
 - (void)tick:(CADisplayLink *)link;
 - (void)stop;
 @end
@@ -261,11 +258,9 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
                 contentToRestore.alpha = 1.0;
             }
         } else if (containerToRestore || contentToRestore) {
-            // Keep dismissed banner hidden briefly while BannerKit finishes removing it so it never flashes,
-            // then restore cleanly in case the view is ever recycled.
             __weak UIView *weakContainer = containerToRestore;
             __weak UIView *weakContent = contentToRestore;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.24 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if (gActiveAnimator && !gActiveAnimator.exiting &&
                     (gActiveAnimator.hideContainer == weakContainer || gActiveAnimator.contentView == weakContent)) {
                     return;
@@ -310,7 +305,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     }
 }
 
-- (BOOL)setupOverlayForView:(UIView *)rawView isExit:(BOOL)isExit {
+- (BOOL)setupOverlayForView:(UIView *)rawView isExit:(BOOL)isExit fromSwipe:(BOOL)fromSwipe {
     UIWindow *win = rawView.window;
     if (!win) return NO;
 
@@ -326,7 +321,16 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 
     CGRect frameInWin = [cardView convertRect:cardView.bounds toCoordinateSpace:win.coordinateSpace];
 
-    // If BannerKit is mid-transition during rapid notifications, fall back to cached resting geometry
+    // On swipe-up dismiss, capture the live presentationLayer position so the droplet starts
+    // seamlessly right where the user's finger released the banner.
+    if (isExit && cardView.layer.presentationLayer && win.layer.presentationLayer) {
+        CGRect presRect = [cardView.layer.presentationLayer convertRect:cardView.layer.presentationLayer.bounds
+                                                                toLayer:win.layer.presentationLayer];
+        if (!CGRectIsEmpty(presRect) && presRect.size.width >= 120.0 && presRect.size.height >= 34.0) {
+            frameInWin = presRect;
+        }
+    }
+
     if ((CGRectIsEmpty(frameInWin) || frameInWin.size.width < winSize.width * 0.55 || frameInWin.size.height < 34.0) &&
         !CGRectIsEmpty(gCachedRestingCardRect)) {
         frameInWin = gCachedRestingCardRect;
@@ -336,13 +340,19 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
         return NO;
     }
 
-    // Enforce resting Y below the Dynamic Island and horizontal centering in portrait
     CGFloat minRestingY = CGRectGetMaxY(cutout) + 10.0;
-    if (frameInWin.origin.y < minRestingY - 4.0 || frameInWin.origin.y > winSize.height * 0.30) {
-        if (!CGRectIsEmpty(gCachedRestingCardRect)) {
-            frameInWin.origin.y = gCachedRestingCardRect.origin.y;
-        } else {
-            frameInWin.origin.y = minRestingY;
+    if (!isExit) {
+        if (frameInWin.origin.y < minRestingY - 4.0 || frameInWin.origin.y > winSize.height * 0.30) {
+            frameInWin.origin.y = !CGRectIsEmpty(gCachedRestingCardRect) ? gCachedRestingCardRect.origin.y : minRestingY;
+        }
+    } else {
+        // Allow slightly elevated swipe-up release positions without snapping downward,
+        // while guarding against offscreen BannerKit dismissal frames.
+        CGFloat minVisibleSwipeY = CGRectGetMaxY(cutout) - 4.0;
+        if (frameInWin.origin.y < CGRectGetMinY(cutout) - 10.0 || frameInWin.origin.y > winSize.height * 0.35) {
+            frameInWin.origin.y = !CGRectIsEmpty(gCachedRestingCardRect) ? gCachedRestingCardRect.origin.y : minRestingY;
+        } else if (fromSwipe && frameInWin.origin.y < minVisibleSwipeY) {
+            frameInWin.origin.y = minVisibleSwipeY;
         }
     }
     frameInWin.origin.x = round((winSize.width - frameInWin.size.width) * 0.5);
@@ -426,12 +436,11 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
 
-        ready = [self setupOverlayForView:view isExit:NO];
+        ready = [self setupOverlayForView:view isExit:NO fromSwipe:NO];
         if (ready) {
             double speedScale = gEntryDuration / 0.48;
             self.duration = fmin(fmax(0.84 * speedScale, 0.46), 1.45);
 
-            // Hide ONLY this notification's container while the droplet emerges
             self.hideContainer.hidden = YES;
             self.hideContainer.alpha = 0.0;
 
@@ -450,7 +459,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     }
 }
 
-- (void)startExitForView:(UIView *)view {
+- (void)startExitForView:(UIView *)view fromSwipe:(BOOL)fromSwipe {
     self.exiting = YES;
 
     __block BOOL ready = NO;
@@ -458,7 +467,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
 
-        ready = [self setupOverlayForView:view isExit:YES];
+        ready = [self setupOverlayForView:view isExit:YES fromSwipe:fromSwipe];
         if (ready) {
             UIImage *snap = DBSnapshotView(self.contentView);
             if (snap) {
@@ -476,13 +485,13 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
                 self.exitSnapshotView = snapView;
             }
 
-            // Hide ONLY this dismissing banner's container
+            // Hide native dismissing banner immediately so stock slide-up never shows behind our droplet
             self.hideContainer.hidden = YES;
             self.hideContainer.alpha = 0.0;
 
-            // Snappy exit duration with zero dead tail once tucked inside the Dynamic Island
             double speedScale = gEntryDuration / 0.48;
-            self.duration = fmin(fmax(0.42 * speedScale, 0.26), 0.72);
+            double baseExit = fromSwipe ? 0.38 : 0.44;
+            self.duration = fmin(fmax(baseExit * speedScale, 0.24), 0.72);
             self.startedAt = CACurrentMediaTime();
             [self renderNormalizedTime:0.0];
             self.effectWindow.hidden = NO;
@@ -518,19 +527,20 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
     double neckProg = 0.0;
 
     if (!self.exiting) {
-        // Entry maps normT (0..1) -> canonical 0..1.2s curve space
+        // ENTRY: drop out of Island (0.0 -> 1.15), bloom width (0.32 -> 1.18), reveal native card (0.62 -> 0.96)
         double t = DBClamp01(normT) * 1.2;
         yProg = DBSpringCurve(t / 1.15, 7.38, 5.15127, 1.43266);
         wProg = DBSpringCurve((t - 0.32) / 0.86, 7.20, 5.40, 1.33333);
         revealProg = DBClamp01((t - 0.62) / 0.34);
         neckProg = DBSpringCurve((t - 0.11) / 0.70, 8.91, 1.26961, 7.01792);
     } else {
-        // Exit maps normT (0..1) -> active 0..0.82s span (eliminating the dead invisible tail!)
+        // EXIT (exact reverse): fade content cleanly (0.0 -> 0.20), squeeze width into teardrop (0.04 -> 0.52),
+        // form liquid neck & suck straight up into the Dynamic Island (0.20 -> 0.82)
         double t = DBClamp01(normT) * 0.82;
-        yProg = 1.0 - DBSpringCurve((t - 0.22) / 0.60, 7.60, 3.80, 1.95);
-        wProg = 1.0 - DBSpringCurve((t - 0.06) / 0.50, 7.90, 3.50, 2.25);
+        yProg = 1.0 - DBSpringCurve((t - 0.20) / 0.62, 7.60, 3.80, 1.95);
+        wProg = 1.0 - DBSpringCurve((t - 0.04) / 0.48, 7.90, 3.50, 2.25);
         revealProg = 1.0 - DBClamp01(t / 0.20);
-        neckProg = 1.0 - DBSpringCurve((t - 0.22) / 0.60, 7.60, 3.80, 1.95);
+        neckProg = 1.0 - DBSpringCurve((t - 0.20) / 0.62, 7.60, 3.80, 1.95);
     }
 
     double clampedWProg = fmax(0.0, wProg);
@@ -561,7 +571,7 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
 
     UIBezierPath *bodyPath = [UIBezierPath bezierPathWithRoundedRect:curRect cornerRadius:curRadius];
 
-    // Curved black liquid neck bridging Dynamic Island bottom to the dropping teardrop
+    // Curved black liquid neck bridging Dynamic Island bottom to the teardrop
     double neckVisibility = 0.0;
     if (clampedYProg > 0.02 && neckProg < 0.94) {
         double rise = DBClamp01(clampedYProg / 0.18);
@@ -591,7 +601,6 @@ static const void *kDBViewEntryTimestampKey = &kDBViewEntryTimestampKey;
         [neckPath closePath];
     }
 
-    // Transition droplet color from pure black (Dynamic Island) toward the banner surface tone
     CGFloat sr = 0.12, sg = 0.12, sb = 0.14, sa = 1.0;
     if (self.surfaceColor) {
         [self.surfaceColor getRed:&sr green:&sg blue:&sb alpha:&sa];
@@ -697,8 +706,6 @@ static UIView *DBExtractBannerViewFromPresentable(id<BNPresentable> presentable)
 static void DBLaunchEntryForView(UIView *view) {
     if (!view || !view.window) return;
 
-    // Deduplicate strictly per-view (so both hooks don't double-fire on the same banner,
-    // while rapid back-to-back notifications ALWAYS get a fresh droplet animation!)
     CFTimeInterval now = CACurrentMediaTime();
     NSNumber *lastEntryNum = objc_getAssociatedObject(view, kDBViewEntryTimestampKey);
     if (lastEntryNum && (now - lastEntryNum.doubleValue < 0.60)) {
@@ -706,7 +713,6 @@ static void DBLaunchEntryForView(UIView *view) {
     }
     objc_setAssociatedObject(view, kDBViewEntryTimestampKey, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // Interrupt any previous exit or stale entry immediately so the new notification drops out smoothly
     if (gActiveAnimator) {
         [gActiveAnimator stop];
     }
@@ -718,7 +724,6 @@ static void DBLaunchEntryForView(UIView *view) {
 
 static void DBScheduleEntryForPresentable(id<BNPresentable> presentable, NSInteger attempt) {
     if (!presentable) return;
-    // If an even newer notification superseded this one before it mounted, yield cleanly
     if (gLatestPresentable && gLatestPresentable != presentable) return;
 
     UIView *bannerView = DBExtractBannerViewFromPresentable(presentable);
@@ -754,8 +759,6 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
 %hook SBNotificationBannerDestination
 
 - (void)presentableWillAppearAsBanner:(id<BNPresentable>)presentable {
-    // Record synchronously BEFORE %orig so a concurrent presentableWillDisappearAsBanner: for an older
-    // banner knows a newer notification is replacing it and will not clobber our entry animation.
     if (gEnabled && !UIAccessibilityIsReduceMotionEnabled()) {
         gLatestPresentable = presentable;
         gLatestEntryRequestTime = CACurrentMediaTime();
@@ -777,10 +780,23 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
 - (void)presentableWillDisappearAsBanner:(id<BNPresentable>)presentable withReason:(NSString *)reason {
     if (gEnabled && gAnimateDismiss && !UIAccessibilityIsReduceMotionEnabled()) {
         NSString *lowerReason = reason ? reason.lowercaseString : @"";
-        BOOL isInteractive = ([lowerReason containsString:@"gesture"] ||
-                              [lowerReason containsString:@"drag"] ||
-                              [lowerReason containsString:@"tap"] ||
-                              [lowerReason containsString:@"action"]);
+
+        // Skip droplet retraction ONLY when tapping the notification to open the app or expanding to Long Look.
+        // Both auto-dismiss AND swipe-up dismissal play the reversed droplet retraction into the Dynamic Island!
+        BOOL isTapOrExpand = ([lowerReason containsString:@"tap"] ||
+                              [lowerReason containsString:@"action"] ||
+                              [lowerReason containsString:@"open"] ||
+                              [lowerReason containsString:@"launch"] ||
+                              [lowerReason containsString:@"select"] ||
+                              [lowerReason containsString:@"longlook"] ||
+                              [lowerReason containsString:@"expand"]);
+
+        BOOL isSwipeDismiss = ([lowerReason containsString:@"gesture"] ||
+                               [lowerReason containsString:@"drag"] ||
+                               [lowerReason containsString:@"pan"] ||
+                               [lowerReason containsString:@"swipe"] ||
+                               [lowerReason containsString:@"user"]);
+
         BOOL isReplacement = ([lowerReason containsString:@"replace"] ||
                               [lowerReason containsString:@"supersed"] ||
                               [lowerReason containsString:@"preempt"]);
@@ -789,13 +805,11 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
         BOOL newerIncoming = (gLatestPresentable && gLatestPresentable != presentable &&
                               ((gActiveAnimator && !gActiveAnimator.exiting) || (now - gLatestEntryRequestTime < 0.45)));
 
-        if (isInteractive) {
+        if (isTapOrExpand) {
             if (gActiveAnimator) {
                 [gActiveAnimator stop];
             }
         } else if (newerIncoming || isReplacement) {
-            // A newer notification is already taking over — hide the old banner quietly so it
-            // doesn't clobber or delay the incoming droplet animation.
             UIView *oldView = DBExtractBannerViewFromPresentable(presentable);
             if (oldView && oldView.window) {
                 UIView *oldCard = DBFindCardView(oldView, oldView.window);
@@ -815,7 +829,7 @@ static void DBScheduleEntryForViewController(UIViewController *vc, NSInteger att
                 }
                 DBDropletAnimator *exitAnimator = [[DBDropletAnimator alloc] init];
                 gActiveAnimator = exitAnimator;
-                [exitAnimator startExitForView:bannerView];
+                [exitAnimator startExitForView:bannerView fromSwipe:isSwipeDismiss];
             }
         }
     }
