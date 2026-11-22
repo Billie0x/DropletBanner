@@ -6,13 +6,14 @@
     <string>DropletBanner</string>
     <key>items</key>
     <array>
+        <!-- General -->
         <dict>
             <key>cell</key>
             <string>PSGroupCell</string>
             <key>label</key>
             <string>Dynamic Island Notifications</string>
             <key>footerText</key>
-            <string>Animates incoming notification banners out of the Dynamic Island or notch and retracts them back on dismiss while retaining native content, actions, sounds, and haptics. Changes apply instantly without respringing.</string>
+            <string>All toggles, sliders, colors, and presets apply live without respringing. Tap Test Droplet Animation anytime to preview your current setup.</string>
         </dict>
         <dict>
             <key>cell</key>
@@ -44,15 +45,51 @@
         </dict>
         <dict>
             <key>cell</key>
-            <string>PSSwitchCell</string>
+            <string>PSButtonCell</string>
+            <key>cellClass</key>
+            <string>DBButtonCell</string>
+            <key>buttonStyle</key>
+            <string>primary</string>
+            <key>action</key>
+            <string>triggerTestPreview:</string>
+            <key>label</key>
+            <string>Test Droplet Animation</string>
+        </dict>
+
+        <!-- Physics Presets & Sliders -->
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Physics Preset</string>
+            <key>footerText</key>
+            <string>Pick a preset for instant tuning, or drag either slider below to switch to Custom.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSegmentCell</string>
+            <key>id</key>
+            <string>PhysicsPreset</string>
             <key>default</key>
-            <true/>
+            <integer>1</integer>
             <key>defaults</key>
             <string>com.billie.dropletbanner</string>
             <key>key</key>
-            <string>TintDropletWithAppIcon</string>
-            <key>label</key>
-            <string>App Icon Color Droplet</string>
+            <string>PhysicsPreset</string>
+            <key>validValues</key>
+            <array>
+                <integer>0</integer>
+                <integer>1</integer>
+                <integer>2</integer>
+                <integer>3</integer>
+            </array>
+            <key>validTitles</key>
+            <array>
+                <string>Snappy</string>
+                <string>Liquid</string>
+                <string>Bouncy</string>
+                <string>Custom</string>
+            </array>
             <key>PostNotification</key>
             <string>com.billie.dropletbanner/prefsChanged</string>
         </dict>
@@ -65,6 +102,8 @@
         <dict>
             <key>cell</key>
             <string>PSSliderCell</string>
+            <key>id</key>
+            <string>EntryDuration</string>
             <key>default</key>
             <real>0.48</real>
             <key>min</key>
@@ -89,6 +128,8 @@
         <dict>
             <key>cell</key>
             <string>PSSliderCell</string>
+            <key>id</key>
+            <string>DropletAmplitude</string>
             <key>default</key>
             <real>1.0</real>
             <key>min</key>
@@ -104,6 +145,304 @@
             <key>PostNotification</key>
             <string>com.billie.dropletbanner/prefsChanged</string>
         </dict>
+
+        <!-- Droplet Color Modes -->
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Droplet Color Mode</string>
+            <key>footerText</key>
+            <string>Colors only the water drop and liquid neck while keeping your native iOS notification banner untouched.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSegmentCell</string>
+            <key>id</key>
+            <string>DropletColorMode</string>
+            <key>default</key>
+            <integer>1</integer>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>DropletColorMode</string>
+            <key>validValues</key>
+            <array>
+                <integer>0</integer>
+                <integer>1</integer>
+                <integer>2</integer>
+            </array>
+            <key>validTitles</key>
+            <array>
+                <string>Black</string>
+                <string>App Icon</string>
+                <string>Custom</string>
+            </array>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>id</key>
+            <string>CustomDropletColorCell</string>
+            <key>cellClass</key>
+            <string>DBColorPickerCell</string>
+            <key>action</key>
+            <string>openCustomColorPicker:</string>
+            <key>label</key>
+            <string>Custom Droplet Color</string>
+        </dict>
+
+        <!-- Bloom Rim Accent -->
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Bloom Rim Accent</string>
+            <key>footerText</key>
+            <string>Traces a brief luminous edge highlight around the banner as the droplet finishes blooming, then fades completely away.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>BloomRimEnabled</string>
+            <key>label</key>
+            <string>Enable Bloom Rim Accent</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Rim Accent Thickness (pt)</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSliderCell</string>
+            <key>default</key>
+            <real>1.4</real>
+            <key>min</key>
+            <real>0.8</real>
+            <key>max</key>
+            <real>3.0</real>
+            <key>showValue</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>BloomRimWidth</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Rim Accent Duration (Seconds)</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSliderCell</string>
+            <key>default</key>
+            <real>0.38</real>
+            <key>min</key>
+            <real>0.20</real>
+            <key>max</key>
+            <real>0.75</real>
+            <key>showValue</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>BloomRimDuration</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+
+        <!-- Dynamic Island Recoil Pulse -->
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Dynamic Island Recoil Pulse</string>
+            <key>footerText</key>
+            <string>Subtly expands the Dynamic Island pill as the droplet detaches and gulps back in.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>IslandRecoilEnabled</string>
+            <key>label</key>
+            <string>Enable Island Recoil Pulse</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Recoil Pulse Intensity</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSliderCell</string>
+            <key>default</key>
+            <real>1.0</real>
+            <key>min</key>
+            <real>0.3</real>
+            <key>max</key>
+            <real>2.0</real>
+            <key>showValue</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>IslandRecoilIntensity</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+
+        <!-- Neck-Snap Micro-Haptic -->
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Neck-Snap Micro-Haptic</string>
+            <key>footerText</key>
+            <string>Fires a crisp haptic tick at the exact moment the liquid neck pinches off or clicks back into the Dynamic Island.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>HapticsEnabled</string>
+            <key>label</key>
+            <string>Enable Micro-Haptic</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSegmentCell</string>
+            <key>default</key>
+            <integer>0</integer>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>HapticStrength</string>
+            <key>validValues</key>
+            <array>
+                <integer>0</integer>
+                <integer>1</integer>
+                <integer>2</integer>
+                <integer>3</integer>
+            </array>
+            <key>validTitles</key>
+            <array>
+                <string>Soft</string>
+                <string>Light</string>
+                <string>Medium</string>
+                <string>Rigid</string>
+            </array>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+
+        <!-- Smart Auto-Pause & App Exclusions -->
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Smart Behavior &amp; Exclusions</string>
+            <key>footerText</key>
+            <string>Low Power Mode bypasses the 120Hz display link to save battery. Excluded apps always keep the stock iOS banner animation.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>PauseInLowPowerMode</string>
+            <key>label</key>
+            <string>Auto-Pause in Low Power Mode</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>PauseInLandscape</string>
+            <key>label</key>
+            <string>Auto-Pause in Landscape</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>default</key>
+            <true/>
+            <key>defaults</key>
+            <string>com.billie.dropletbanner</string>
+            <key>key</key>
+            <string>ExcludedAppsEnabled</string>
+            <key>label</key>
+            <string>Enable App Exclusions</string>
+            <key>PostNotification</key>
+            <string>com.billie.dropletbanner/prefsChanged</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSLinkCell</string>
+            <key>id</key>
+            <string>ExcludedAppsLink</string>
+            <key>detail</key>
+            <string>DBExcludedAppsController</string>
+            <key>isController</key>
+            <true/>
+            <key>get</key>
+            <string>excludedAppsSummary:</string>
+            <key>label</key>
+            <string>Excluded Apps</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>cellClass</key>
+            <string>DBButtonCell</string>
+            <key>buttonStyle</key>
+            <string>destructive</string>
+            <key>action</key>
+            <string>resetToDefaults:</string>
+            <key>label</key>
+            <string>Reset to Defaults</string>
+        </dict>
+
+        <!-- Credits -->
         <dict>
             <key>cell</key>
             <string>PSGroupCell</string>

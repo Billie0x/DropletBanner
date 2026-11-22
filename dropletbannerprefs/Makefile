@@ -5,10 +5,10 @@ include $(THEOS)/makefiles/common.mk
 
 BUNDLE_NAME = DropletBannerPrefs
 DropletBannerPrefs_FILES = DBRootListController.m
-DropletBannerPrefs_FRAMEWORKS = UIKit QuartzCore
+DropletBannerPrefs_FRAMEWORKS = UIKit QuartzCore CoreGraphics CoreFoundation
 DropletBannerPrefs_PRIVATE_FRAMEWORKS = Preferences
 DropletBannerPrefs_INSTALL_PATH = /Library/PreferenceBundles
-DropletBannerPrefs_CFLAGS = -fobjc-arc
+DropletBannerPrefs_CFLAGS = -fobjc-arc -Wall
 
 include $(THEOS_MAKE_PATH)/bundle.mk
 
