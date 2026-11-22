@@ -12,4 +12,4 @@ DropletBannerPrefs_CFLAGS = -fobjc-arc -Wall
 
 include $(THEOS_MAKE_PATH)/bundle.mk
 
-internal-stage:: ; mkdir -p $(THEOS_STAGING_DIR)$(THEOS_PACKAGE_INSTALL_PREFIX)/Library/PreferenceLoader/Preferences/DropletBanner && cp entry.plist $(THEOS_STAGING_DIR)$(THEOS_PACKAGE_INSTALL_PREFIX)/Library/PreferenceLoader/Preferences/DropletBanner/Root.plist && cp Resources/icon.png Resources/icon@2x.png Resources/icon@3x.png $(THEOS_STAGING_DIR)$(THEOS_PACKAGE_INSTALL_PREFIX)/Library/PreferenceLoader/Preferences/DropletBanner/
+internal-stage:: ; mkdir -p $(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/DropletBanner && cp entry.plist $(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/DropletBanner/Root.plist && cp Resources/icon.png Resources/icon@2x.png Resources/icon@3x.png $(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/DropletBanner/
